@@ -1,4 +1,4 @@
-# passerelle
+# xe3000-open-firmware
 
 An up-to-date, reproducible OpenWrt for the **GL.iNet GL-XE3000 (Puli AX)**.
 
