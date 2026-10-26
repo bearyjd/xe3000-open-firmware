@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Blocks commits that stage .env files, harvest/raw/ content, or anything that looks like an Anthropic key.
+# Install: scripts/install-hooks.sh (sets core.hooksPath=hooks)
+set -u
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    .env.example) ;;
+    .env|.env.*|*/.env|*/.env.*)
+      echo "pre-commit: BLOCKED staged env file: $f" >&2; fail=1 ;;
+    harvest/raw/*|cache/*|findings/raw/*|unpacked/*)
+      echo "pre-commit: BLOCKED staged private path: $f" >&2; fail=1 ;;
+  esac
+done <<< "$staged"
+
+# Anthropic keys: sk-ant-<type>-<long token>. Scan only added lines; never print the match.
+if git diff --cached -U0 --diff-filter=ACMR | grep -E '^\+' | grep -v '^+++' \
+     | grep -Eq 'sk-ant-[A-Za-z0-9_-]{20,}'; then
+  echo "pre-commit: BLOCKED staged content matches an Anthropic API key pattern (match not shown)" >&2
+  fail=1
+fi
+exit $fail

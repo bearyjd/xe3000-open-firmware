@@ -1,0 +1,20 @@
+# secrets / raw data — never commit
+.env
+.env.*
+!.env.example
+harvest/raw/
+harvest/redacted/
+cache/
+findings/raw/
+unpacked/
+build/
+*.tar*
+graft/
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+.omc/
