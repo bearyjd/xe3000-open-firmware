@@ -36,6 +36,7 @@ ALLOWED_EXTERNAL = {
     "cat /proc/sys/kernel/random/uuid": ({None}, False),
     "date +%s": ({None}, False),
     'readlink -f "$ff_p"': ({"frame_file"}, True),
+    'readlink -f "$cn_p"': ({"canon_safe"}, True),
     'ls -lnL "$ff_p"': ({"frame_file"}, True),
     'od -An -v -tx1 "$ff_p"': ({"frame_file"}, True),
     f'hexdump -v -e {HEXFMT} "$ff_p"': ({"frame_file"}, True),
@@ -338,6 +339,16 @@ MUTATIONS = [
     "frame_file sys /proc/1/cmdline",
     "frame_cmd sys cmd/cron cat /etc/crontabs/root",
     "frame_file sys /etc/crontabs/root",
+    # nested / doubly nested command substitutions inside double quotes (outer command position must be checked)
+    'printf "%s" "$(ubus call network.interface.wan down $(printf x))"',
+    'x="$(ubus call network.interface.wan down $(printf x))"',
+    'printf "%s" "$(printf "%s" "$(ifdown wan)")"',
+    'printf "%s" "$(printf "%s" "$(printf "%s" "$(reboot)")")"',
+    'printf "%s" "$(printf x; dmesg -c)"',
+    'printf "%s" "$(printf $(printf x) | kill 1)"',
+    'printf "%s" "`ifdown wan`"',
+    'printf "%s" "`printf $(ifdown wan)`"',
+    'printf "%s" "$(( $(ifdown wan) + 1 ))"',
 ]
 
 
