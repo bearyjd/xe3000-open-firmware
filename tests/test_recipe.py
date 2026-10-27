@@ -16,7 +16,8 @@ UCI_DEFAULTS = RECIPE / "files" / "etc" / "uci-defaults" / "90-xe3000-defaults"
 KERNEL_PATCHES = sorted((RECIPE / "patches" / "kernel").glob("*.patch"))
 TREE_PATCHES = sorted((RECIPE / "patches" / "tree").glob("*.patch"))
 RUNBOOK = REPO / "docs" / "runbooks" / "flash-and-rollback.md"
-SHELL_SCRIPTS = [PREPARE, SIM, UCI_DEFAULTS, RECIPE / "container-build.sh"]
+LIB = RECIPE / "lib.sh"
+SHELL_SCRIPTS = [PREPARE, SIM, UCI_DEFAULTS, RECIPE / "container-build.sh", LIB]
 BOOTARGS = 'bootargs = "console=ttyS0,115200n8 root=PARTLABEL=rootfs rootwait";'
 DTSI = "target/linux/mediatek/dts/mt7981a-glinet-gl-x3000-xe3000-common.dtsi"
 
@@ -300,6 +301,8 @@ def _build_sandbox(tmp_path, commit_in_pins):
     root = tmp_path / "sandbox"
     (root / "recipe").mkdir(parents=True)
     shutil.copy(RECIPE / "container-build.sh", root / "recipe" / "container-build.sh")
+    if LIB.is_file():
+        shutil.copy(LIB, root / "recipe" / "lib.sh")
     (root / "recipe" / "pins.env").write_text(
         f"OPENWRT_REPO=https://example.invalid/openwrt.git\nOPENWRT_TAG=v25.12.99\nOPENWRT_COMMIT={commit_in_pins}\n")
     tree = root / "build" / "openwrt"
@@ -309,6 +312,13 @@ def _build_sandbox(tmp_path, commit_in_pins):
     _git(tree, "add", "-A")
     _git(tree, "commit", "-q", "-m", "x")
     return root, tree, _git(tree, "rev-parse", "HEAD")
+
+
+def _seal(root, tree):
+    """Record the input manifest exactly as prepare.sh does (via the shared library)."""
+    r = subprocess.run(["bash", "-c", f'. "{root}/recipe/lib.sh" && xe3000_write_manifest "{tree}"'],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
 def _run_build(root):
@@ -338,6 +348,7 @@ def test_container_build_accepts_verified_tree(tmp_path):
     root, tree, head = _build_sandbox(tmp_path, "a" * 40)
     (root / "recipe" / "pins.env").write_text(f"OPENWRT_REPO=x\nOPENWRT_TAG=t\nOPENWRT_COMMIT={head}\n")
     (tree / ".xe3000-prepared").write_text(head + "\n")
+    _seal(root, tree)
     r = _run_build(root)
     assert r.returncode == 0, r.stderr
 
@@ -532,3 +543,202 @@ def test_runbook_requires_verified_full_backup_before_any_flash():
     low = RUNBOOK.read_text().lower()
     assert "full emmc" in low or "full mtd" in low
     assert re.search(r"(do not|never) flash[^.\n]*(until|without)[^.\n]*(verified|backup)", low)
+
+
+# ---- round 2: committed-only inputs, credential content, input manifest ------------------------------------------
+
+def _commit_all(root):
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "tracked")
+
+
+def _fake_credentials():
+    """Credential-shaped lines assembled at runtime so no secret-looking literal sits in the repo."""
+    word = "hunter" + "2hunter2"
+    return {
+        "uci-option": "config wifi-iface\n\toption " + "ke" + "y '" + word + "'\n",
+        "uci-set": "uci set wireless.default_radio0." + "ps" + "k='" + word + "'\n",
+        "shell-assign": "WIFI_" + "PASS" + "WORD=" + word + "\n",
+        "token": "api_" + "tok" + "en: " + word + "\n",
+        "ghp": "x=gh" + "p_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8\n",
+    }
+
+
+@pytest.mark.parametrize("kind", sorted(_fake_credentials()))
+def test_prepare_refuses_credential_content_even_in_committed_overlay_file(tmp_path, upstream, kind):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    sim = root / "recipe" / "files" / "usr" / "sbin" / "xe3000-sim-select"
+    sim.write_text(sim.read_text() + _fake_credentials()[kind])
+    _commit_all(root)
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert "credential" in r.stderr.lower()
+
+
+def test_prepare_refuses_modified_tracked_overlay_file(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _commit_all(root)
+    sim = root / "recipe" / "files" / "usr" / "sbin" / "xe3000-sim-select"
+    sim.write_text(sim.read_text() + "# harmless local edit\n")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert "uncommitted" in r.stderr.lower()
+
+
+def test_prepare_refuses_staged_but_uncommitted_overlay_change(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _commit_all(root)
+    (root / "recipe" / "files" / "etc" / "staged-extra").write_text("harmless\n")
+    _git(root, "add", "-A")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0 and "uncommitted" in r.stderr.lower()
+
+
+def _plant_feed(root, rel, content="x\n"):
+    path = root / "recipe" / "feeds" / "xe3000" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
+@pytest.mark.parametrize("rel", [".env", "gl-puli-mcu/.env", "gl-puli-mcu/files/deploy.key", "gl-puli-mcu/id_ed25519"])
+def test_prepare_refuses_secret_named_package_inputs(tmp_path, upstream, rel):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _plant_feed(root, rel)
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert "package" in r.stderr.lower()
+
+
+def test_prepare_refuses_credential_content_in_package_inputs(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _plant_feed(root, "gl-puli-mcu/files/net.conf", _fake_credentials()["shell-assign"])
+    _commit_all(root)
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert "credential" in r.stderr.lower()
+
+
+def test_prepare_refuses_symlinks_in_package_inputs(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    link = root / "recipe" / "feeds" / "xe3000" / "gl-puli-mcu" / "leak"
+    link.symlink_to("/etc/hostname")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0
+    assert not (tmp_path / "build" / "openwrt").exists()
+
+
+def test_prepare_refuses_untracked_or_ignored_package_inputs_in_a_git_checkout(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _commit_all(root)
+    _plant_feed(root, "gl-puli-mcu/extra.c", "int main(void){return 0;}\n")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0 and "untracked" in r.stderr.lower()
+    assert not (tmp_path / "build" / "openwrt").exists()
+
+
+def test_prepare_refuses_modified_tracked_package_input(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _commit_all(root)
+    mk = root / "recipe" / "feeds" / "xe3000" / "gl-puli-mcu" / "Makefile"
+    mk.write_text(mk.read_text() + "# local edit\n")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0 and "uncommitted" in r.stderr.lower()
+
+
+def test_prepare_writes_input_manifest_and_container_build_accepts_the_prepared_tree(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    (root / "recipe" / "pins.env").write_text(
+        f"OPENWRT_REPO={repo}\nOPENWRT_TAG=v25.12.99\nOPENWRT_COMMIT={commit}\n")
+    shutil.copy(RECIPE / "container-build.sh", root / "recipe" / "container-build.sh")
+    env = {**os.environ, "BUILD_DIR": str(root / "build"), "GIT_CONFIG_GLOBAL": "/dev/null"}
+    r = subprocess.run(["bash", str(root / "recipe" / "prepare.sh")], env=env, capture_output=True, text=True,
+                       timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    tree = root / "build" / "openwrt"
+    manifest = (tree / ".xe3000-manifest").read_text()
+    assert "files/usr/sbin/xe3000-sim-select" in manifest and "package/xe3000/gl-puli-mcu/Makefile" in manifest
+    assert _run_build(root).returncode == 0
+
+
+def _prepared(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    (root / "recipe" / "pins.env").write_text(
+        f"OPENWRT_REPO={repo}\nOPENWRT_TAG=v25.12.99\nOPENWRT_COMMIT={commit}\n")
+    env = {**os.environ, "BUILD_DIR": str(root / "build"), "GIT_CONFIG_GLOBAL": "/dev/null"}
+    r = subprocess.run(["bash", str(root / "recipe" / "prepare.sh")], env=env, capture_output=True, text=True,
+                       timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    return root, root / "build" / "openwrt"
+
+
+def test_container_build_rejects_overlay_file_added_after_prepare(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    wireless = tree / "files" / "etc" / "config" / "wireless"
+    wireless.parent.mkdir(parents=True, exist_ok=True)
+    wireless.write_text("config wifi-iface\n")
+    r = _run_build(root)
+    assert r.returncode != 0 and "prepared inputs" in r.stderr
+
+
+def test_container_build_rejects_modified_config_and_package_after_prepare(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    mk = tree / "package" / "xe3000" / "gl-puli-mcu" / "Makefile"
+    mk.write_text(mk.read_text() + "# changed\n")
+    assert _run_build(root).returncode != 0
+
+
+def test_container_build_rejects_removed_patch_after_prepare(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    (tree / "target/linux/generic/pending-6.12" / KERNEL_PATCHES[0].name).unlink()
+    assert _run_build(root).returncode != 0
+
+
+def test_container_build_rejects_reverted_tree_patch_after_prepare(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    _git(tree, "checkout", "--", DTSI)
+    assert _run_build(root).returncode != 0
+
+
+def test_container_build_rejects_seed_config_dropped_after_prepare(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    (tree / ".config").write_text("# emptied\n")
+    assert _run_build(root).returncode != 0
+
+
+def test_container_build_rejects_missing_manifest(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    (tree / ".xe3000-manifest").unlink()
+    assert _run_build(root).returncode != 0
+
+
+def test_container_build_rescans_credentials_even_if_manifest_matches(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    wireless = tree / "files" / "etc" / "config" / "wireless"
+    wireless.parent.mkdir(parents=True, exist_ok=True)
+    wireless.write_text(_fake_credentials()["uci-option"])
+    _seal(root, tree)  # attacker also refreshes the manifest: the credential rescan must still refuse
+    r = _run_build(root)
+    assert r.returncode != 0 and "credential" in r.stderr.lower()
+
+
+def test_container_build_rejects_symlink_in_prepared_inputs(tmp_path, upstream):
+    root, tree = _prepared(tmp_path, upstream)
+    (tree / "files" / "etc" / "leak").symlink_to("/etc/hostname")
+    _seal(root, tree)
+    assert _run_build(root).returncode != 0
