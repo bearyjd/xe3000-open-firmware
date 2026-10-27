@@ -710,3 +710,31 @@ def test_resume_keeps_prior_sync_spend_in_committed_usd(root, stamp):
     _resume(root, client)
     final = _manifest(root)
     assert final["committed_usd"] >= prior["committed_usd"] + 1.9 * extra
+
+
+def test_symlinked_denied_file_is_never_sent_under_an_allowed_name(root, stamp):
+    red = root / "harvest" / "redacted"
+    (red / "etc" / "config").mkdir(parents=True)
+    (red / "etc" / "init.d").mkdir(parents=True)
+    (red / "etc" / "config" / "wireless").write_text("option key 'WIRELESS-MARK'\n")
+    (red / "etc" / "init.d" / "real").write_text("start() {\n  echo real-start\n}\n")
+    os.symlink("../config/wireless", red / "etc" / "init.d" / "gl_cloud")
+    stamp(root)
+    client = FakeClient(script=always_good)
+    argv = ["--root", str(root), "--run-id", "r1", "--no-canary", "--max-usd", "5"]
+    assert cli.main(argv, client_factory=lambda: client) == 0
+    sent = json.dumps([c[2] for c in client.create_calls] + [c[2] for c in client.count_calls])
+    assert "real-start" in sent and "WIRELESS-MARK" not in sent
+    skipped = {s["name"]: s["reason"] for s in _manifest(root, "r1")["skipped"]}
+    assert skipped == {"redacted/etc/init.d/gl_cloud": "symlink"}
+
+
+def test_hardlinked_input_refuses_the_run(root, stamp, capsys):
+    red = root / "harvest" / "redacted"
+    (red / "etc" / "init.d").mkdir(parents=True)
+    (red / "etc" / "init.d" / "a").write_text("x\n")
+    os.link(red / "etc" / "init.d" / "a", red / "etc" / "init.d" / "b")
+    client = FakeClient(script=always_good)
+    argv = ["--root", str(root), "--run-id", "r1", "--no-canary"]
+    assert cli.main(argv, client_factory=lambda: client) == 2
+    assert "hardlink" in capsys.readouterr().err and client.count_calls == []

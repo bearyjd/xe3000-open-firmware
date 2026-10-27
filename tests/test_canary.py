@@ -203,3 +203,26 @@ def test_preflight_missing_canary_with_marker_needs_flag(root, fixture_tree, tmp
     assert preflight.main(args) == 2
     assert "--no-canary" in capsys.readouterr().err
     assert preflight.main([*args, "--no-canary"]) == 0
+
+
+def test_scan_finds_percent_encoded_every_char_and_json_escaped_forms():
+    import json as _json
+    secret = RAW_CANARY
+    full_pct = "".join(f"%{b:02X}" for b in secret.encode())
+    full_pct_lower = full_pct.lower()
+    json_escaped = _json.dumps("a\"b" + secret + "c\\d")[1:-1]
+    unicode_escaped = "".join(f"\\u{ord(c):04x}" for c in secret)
+    for form in (full_pct, full_pct_lower, json_escaped, unicode_escaped):
+        assert canary.scan({"f": f"x {form} y\n"}, [secret]) == [("f", 1)], form
+
+
+def test_scan_finds_a_canary_that_contains_quotes_in_its_json_form():
+    quoted = 'pa"ss' + "wd-12"
+    import json as _json
+    assert canary.scan({"f": _json.dumps({"k": quoted})}, [quoted]) == [("f", 1)]
+
+
+def test_readme_documents_short_pin_limit():
+    from conftest import REPO
+    readme = (REPO / "README.md").read_text().lower()
+    assert "4-digit" in readme and "pin" in readme and "canar" in readme

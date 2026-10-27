@@ -62,3 +62,48 @@ def test_refuses_allowed_root_that_is_symlink_to_raw(tmp_path):
 def test_refuses_outside_tree(root, tmp_path):
     with pytest.raises(paths.PathRefused):
         paths.check_path(tmp_path / "elsewhere", root)
+
+
+# ---- round 3: symlink / hardlink bypass of name-based decisions ----
+
+def test_file_symlinks_are_skipped_not_followed(root):
+    red = root / "harvest" / "redacted"
+    (red / "etc" / "config").mkdir(parents=True)
+    (red / "etc" / "init.d").mkdir(parents=True)
+    (red / "etc" / "config" / "wireless").write_text("WIRELESS-SECRET-BYTES\n")
+    os.symlink("../config/wireless", red / "etc" / "init.d" / "gl_cloud")
+    (red / "etc" / "init.d" / "real").write_text("ok\n")
+    names = [f.name for f in paths.list_input_files(red, root)]
+    assert "redacted/etc/init.d/gl_cloud" not in names and "redacted/etc/init.d/real" in names
+    assert paths.list_symlinks(red, root) == ("redacted/etc/init.d/gl_cloud",)
+
+
+def test_symlink_to_outside_the_root_is_still_refused(root, tmp_path):
+    (tmp_path / "outside.txt").write_text("x\n")
+    os.symlink(tmp_path / "outside.txt", root / "harvest" / "redacted" / "l")
+    with pytest.raises(paths.PathRefused):
+        paths.list_input_files(root / "harvest" / "redacted", root)
+
+
+def test_hardlinks_are_refused_with_a_clear_message(root):
+    red = root / "harvest" / "redacted"
+    (red / "a").write_text("x\n")
+    os.link(red / "a", red / "b")
+    with pytest.raises(paths.PathRefused, match="hardlink"):
+        paths.list_input_files(red, root)
+
+
+def test_hardlink_to_a_file_outside_the_tree_is_refused(root, tmp_path):
+    (tmp_path / "o.txt").write_text("x\n")
+    os.link(tmp_path / "o.txt", root / "harvest" / "redacted" / "h")
+    with pytest.raises(paths.PathRefused, match="hardlink"):
+        paths.list_input_files(root / "harvest" / "redacted", root)
+
+
+def test_real_path_must_match_the_candidate_path(root):
+    red = root / "harvest" / "redacted"
+    (red / "etc" / "config").mkdir(parents=True)
+    (red / "etc" / "config" / "wireless").write_text("W\n")
+    (red / "etc" / "init.d").symlink_to("config")  # directory link: etc/init.d/wireless is really etc/config/wireless
+    names = [f.name for f in paths.list_input_files(red, root)]
+    assert names == ["redacted/etc/config/wireless"]

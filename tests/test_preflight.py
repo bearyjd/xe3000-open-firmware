@@ -319,6 +319,41 @@ def test_gitleaks_stays_quiet_on_review_benign_lines(root):
     assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
 
 
+def _r3_lines():
+    from attack3_data import CASES
+    from test_attack3 import B64, H1_BENIGN, H1_LINES, TOK, V
+    cases = {c[0]: c[1] for c in CASES}
+    leaking = ["goodcloud-bind", "mqtt-conf", "b64-blob", "lua-setpass", "cloud-bind-url"]
+    extra = [f"secret_blob={V}", f"psk_hex={V}", f"key_material: {V}", f"password_hash={V}", f"token_value={V}",
+             f"pass_enc={V}", f"blob {B64}", f"data {B64[:20]}/{B64[20:]}", f"x={B64}", "+QCCID: 89860012345678901234F",
+             "ICCID 8901260123456789012F detected", "console=ttyMSM0 androidboot.serialno=0123456789abcdef",
+             "serialno=0123456789abcdef", "usb 1-1: SerialNumber: 0123456789abcdef", "serial number: ABCD1234EFGH",
+             "Serial: ABCD1234EFGH", f"https://goodcloud.xyz/bind?code={V}&mac=xx"]
+    return [cases[k] for k in leaking] + H1_LINES + extra, H1_BENIGN
+
+
+R3_LINES, R3_BENIGN = _r3_lines()
+R3_BENIGN = R3_BENIGN + ["\toption auth 'chap'", "auth_type=pap", "key_mgmt=WPA-PSK", "token_bucket: 10",
+                         "Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled", "serial8250: ttyS0 at MMIO",
+                         "/usr/lib/lua/luci/controller/admin/network_status.lua", "sha256 " + "ab" * 16]
+
+
+@pytest.mark.requires_gitleaks
+@pytest.mark.parametrize("line", R3_LINES, ids=[l.splitlines()[0][:34] for l in R3_LINES])
+def test_gitleaks_has_independent_rules_for_round3_forms(root, line):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text(line + "\n")  # raw, never redacted
+    res = _scan(root, [root / "harvest" / "redacted"])
+    assert res.stamp is None and {h.file for h in res.hits} == {"redacted/etc/x.txt"}, res.hits
+
+
+@pytest.mark.requires_gitleaks
+def test_gitleaks_stays_quiet_on_round3_benign_lines(root):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text("\n".join(R3_BENIGN) + "\n")
+    assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
+
+
 @pytest.mark.requires_gitleaks
 def test_benign_fixture_tree_is_clean(root, fixture_tree):
     res = _scan(root, [root / "harvest" / "redacted"])
