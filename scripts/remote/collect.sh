@@ -79,6 +79,22 @@ is_excluded() {
   return 1
 }
 
+# canon_safe PATH: fails CLOSED. rc 0 only when readlink -f produced an absolute canonical target that is not
+# excluded; rc 1 = target could not be computed (no readlink, failure, timeout, empty or relative output); rc 2 = excluded.
+canon_safe() {
+  cn_p=$1
+  command -v readlink >/dev/null 2>&1 || return 1
+  cn_r=$($TMO readlink -f "$cn_p" 2>/dev/null </dev/null)
+  cn_rc=$?
+  if [ "$cn_rc" -ne 0 ] || [ -z "$cn_r" ]; then return 1; fi
+  case $cn_r in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  if is_excluded "$cn_r"; then return 2; fi
+  return 0
+}
+
 # frame_file KIND PATH [hex]: frame one regular file (capped text read, or hex). Silent on non-regular files.
 frame_file() {
   ff_k=$1
@@ -90,11 +106,13 @@ frame_file() {
   if is_excluded "$ff_p"; then skipped "$ff_p" excluded; return 0; fi
   if [ ! -e "$ff_p" ]; then missing "$ff_p"; return 0; fi
   if [ ! -f "$ff_p" ]; then return 0; fi
-  ff_r=
-  if command -v readlink >/dev/null 2>&1; then
-    ff_r=$($TMO readlink -f "$ff_p" 2>/dev/null </dev/null)
-  fi
-  if [ -n "$ff_r" ] && is_excluded "$ff_r"; then skipped "$ff_p" excluded-target; return 0; fi
+  canon_safe "$ff_p"
+  ff_c=$?
+  case $ff_c in
+    0) ;;
+    2) skipped "$ff_p" excluded-target; return 0 ;;
+    *) skipped "$ff_p" canon-failed; return 0 ;;
+  esac
   ff_l=$($TMO ls -lnL "$ff_p" 2>/dev/null </dev/null)
   if [ -z "$ff_l" ]; then skipped "$ff_p" stat-failed; return 0; fi
   # shellcheck disable=SC2086  # intentional word splitting; path charset above has no glob characters
@@ -192,11 +210,15 @@ proc_comm_table() {
 crontab_filtered() {
   for ct_f in "$CRONDIR"/*; do
     [ -f "$ct_f" ] || continue
+    if [ -L "$ct_f" ]; then printf '# skipped %s (symlink)\n' "${ct_f##*/}"; continue; fi
     is_excluded "$ct_f" && continue
+    if ! canon_safe "$ct_f"; then printf '# skipped %s (canonical target unknown or excluded)\n' "${ct_f##*/}"; continue; fi
     printf '# file %s\n' "${ct_f##*/}"
     ct_drop=0
     while IFS= read -r ct_l || [ -n "$ct_l" ]; do
       case $ct_l in
+        *:*:*:*:*:*:*:*:*|*:\$[0-9a-z]*\$*)
+          ct_drop=$((ct_drop + 1)) ;;
         *[Pp][Aa][Ss][Ss]*|*[Pp][Ww][Dd]*|*[Ss][Ee][Cc][Rr][Ee][Tt]*|*[Tt][Oo][Kk][Ee][Nn]*|*[Kk][Ee][Yy]*|*[Aa][Uu][Tt][Hh]*|*[Uu][Ss][Ee][Rr]*|*"-u "*|*"-p "*|*"-U "*|*"-P "*|*-[pPuU][!\ ]*|*://*|*[Pp][Ww]*=*|*[Pp][Ss][Kk]*=*|*[Aa][Pp][Ii]*=*)
           ct_drop=$((ct_drop + 1)) ;;
         *) printf '%s\n' "$ct_l" ;;

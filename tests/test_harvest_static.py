@@ -35,7 +35,6 @@ HEXFMT = """'16/1 "%02x " "\\n"'"""
 ALLOWED_EXTERNAL = {
     "cat /proc/sys/kernel/random/uuid": ({None}, False),
     "date +%s": ({None}, False),
-    'readlink -f "$ff_p"': ({"frame_file"}, True),
     'readlink -f "$cn_p"': ({"canon_safe"}, True),
     'ls -lnL "$ff_p"': ({"frame_file"}, True),
     'od -An -v -tx1 "$ff_p"': ({"frame_file"}, True),
@@ -167,6 +166,26 @@ class Seg:
         self.text, self.tmo, self.func, self.assigns, self.line = text, tmo, func, assigns, line
 
 
+def _balanced_subs(text):
+    """Contents of every outermost $(...) in text (paren-balanced, so nested substitutions stay inside their parent;
+    an unbalanced one runs to the end). $(( is arithmetic: skipped, but substitutions inside it are still found.
+    Backtick bodies are returned as well."""
+    out, i = [], 0
+    while i < len(text):
+        if text.startswith("$((", i):
+            i += 3
+        elif text.startswith("$(", i):
+            depth, j = 1, i + 2
+            while j < len(text) and depth:
+                depth += (text[j] == "(") - (text[j] == ")")
+                j += 1
+            out.append(text[i + 2: j - 1 if depth == 0 else j])
+            i = j
+        else:
+            i += 1
+    return out + re.findall(r"`([^`]*)`", text)
+
+
 def _segs(text, func, line, top):
     """Yield Seg objects for one logical line; command substitutions are analysed recursively, including the ones
     inside double-quoted strings."""
@@ -186,7 +205,7 @@ def _segs(text, func, line, top):
         t = t[: m.start()] + "X" + t[m.end():]
     for item in store:
         if item.startswith('"'):
-            subs.extend(re.findall(r"\$\(([^()]*)\)", item))
+            subs.extend(_balanced_subs(item))
     for piece in re.split(r";|&&|\|\||\|", t):
         seg = re.sub(r"\s+", " ", piece).strip()
         seg = re.sub(r"^(?:(?:if|elif|while|until|then|do|else|!|\{)(?:\s+|$))+", "", seg)
