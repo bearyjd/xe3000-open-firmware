@@ -186,6 +186,17 @@ def test_proc_comm_table_has_only_pid_and_name():
     assert out and all(re.fullmatch(r"\d+ \S.*", l) for l in out)
 
 
+@pytest.mark.parametrize("shell", SHELLS)
+def test_proc_comm_table_skips_vanished_and_empty_comm(tmp_path, shell):
+    for pid, comm in (("1", "init\n"), ("2", ""), ("4", "a b\n")):
+        (tmp_path / pid).mkdir()
+        (tmp_path / pid / "comm").write_text(comm)
+    (tmp_path / "3").mkdir()  # process exited: no comm file
+    (tmp_path / "self").mkdir()  # non-numeric entry is ignored
+    out = run_fn("proc_comm_table", shell=shell, env={"PROC_ROOT": str(tmp_path)})
+    assert out.splitlines() == ["1 init", "4 a b"]
+
+
 def test_logs_are_opt_in_via_positional_arg():
     base = run_fn("collect_system")
     assert "@@SKIPPED logread logs-not-requested" in base
