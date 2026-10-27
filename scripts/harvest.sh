@@ -63,7 +63,7 @@ valid_name() {
 # cannot forge a frame boundary. Everything before that announcement is ignored.
 split_stream() {
   local stream=$1 frames=$2 manifest=$3
-  local line nonce="" in_frame=0 discard=0 have_prev=0 prev="" fkind="" fname="" fpath="" tag extra reason rest
+  local line nonce="" in_frame=0 discard=0 have_prev=0 prev="" fkind="" fname="" fpath="" extra reason rest
   n_ok=0 n_partial=0 n_rej=0 n_missing=0 n_skipped=0 n_capped=0 n_notimeout=0 saw_done=0
 
   while IFS= read -r line || [[ -n $line ]]; do
@@ -99,7 +99,7 @@ split_stream() {
     fi
     case $line in
       '@@BEGIN '*)
-        read -r tag fkind fname extra <<<"$line" || true
+        read -r _ fkind fname extra <<<"$line" || true
         reason=""
         if [[ -n ${extra:-} || -z ${fname:-} ]]; then reason=malformed
         elif [[ ! $fkind =~ $KIND_RE ]]; then reason=bad-kind
