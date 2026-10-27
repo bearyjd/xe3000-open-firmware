@@ -22,6 +22,7 @@ test: build
       -v "{{ROOT}}/containers:/work/containers:ro,z" -v "{{ROOT}}/justfile:/work/justfile:ro,z" \
       -v "{{ROOT}}/.github:/work/.github:ro,z" -v "{{ROOT}}/.gitleaks-baseline.json:/work/.gitleaks-baseline.json:ro,z" \
       -v "{{ROOT}}/docs:/work/docs:ro,z" -v "{{ROOT}}/README.md:/work/README.md:ro,z" \
+      -v "{{ROOT}}/recipe:/work/recipe:ro,z" \
       {{IMAGE}} pytest -c tests/pytest.ini -p no:cacheprovider --cov=recon --cov-report=term-missing
 
 # Host wrapper (stdlib only): gitleaks pre-flight over harvest/redacted and unpacked; writes the stamp.
@@ -51,3 +52,13 @@ dry-run RUN_ID *ARGS: build
 analyze RUN_ID *ARGS: build
     ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} IMAGE={{quote(IMAGE)}} HARDENING={{quote(hardening)}} \
       bash "{{ROOT}}/scripts/analyze-container.sh" "$@"
+
+# Build recipe (OpenWrt 25.12.x). Nothing here flashes or touches the router.
+recipe-image:
+    {{PODMAN}} build -t localhost/xe3000-open-firmware-build:0.1 -f "{{ROOT}}/recipe/Containerfile" "{{ROOT}}/recipe"
+
+recipe-prepare *ARGS:
+    bash "{{ROOT}}/recipe/prepare.sh" "$@"
+
+recipe-build STEP="feeds": recipe-image
+    PODMAN={{quote(PODMAN)}} bash "{{ROOT}}/recipe/container-build.sh" "$1"

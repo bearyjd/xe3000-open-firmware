@@ -1,0 +1,5 @@
+#!/bin/sh
+# First-boot defaults for the XE3000 image. Idempotent; touches only the hostname.
+uci -q set system.@system[0].hostname='xe3000'
+uci commit system
+exit 0
