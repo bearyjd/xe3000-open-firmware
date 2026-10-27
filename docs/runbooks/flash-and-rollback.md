@@ -32,7 +32,7 @@ Store the backup somewhere off the router. The backup contains device-unique dat
 
 1. Power off. Hold the reset button while powering on, until the LED pattern the vendor documents for recovery mode appears.
 2. Connect the laptop by cable to the LAN port. Browse to the recovery address documented by the vendor for this model.
-3. Upload the OpenWrt `factory` image from `build/` and wait for the page to report completion. Do not power off during the write.
+3. Upload the XE3000 `*-squashfs-sysupgrade.bin` image from `build/` (the upstream install instructions for this model use the sysupgrade image in U-Boot web recovery). Before uploading, check that the file name carries the `glinet_gl-xe3000` model and compare its `sha256sum` with the build's `sha256sums` file. Do not upload factory, preloader or FIP artifacts. Wait for the page to report completion and do not power off during the write.
 4. The router reboots into the new image. U-Boot is not modified by this path.
 
 ## 4. Rollback

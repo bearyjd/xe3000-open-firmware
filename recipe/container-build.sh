@@ -22,7 +22,21 @@ compile) cmd="make -j\$(nproc) V=s" ;;
 	;;
 esac
 
-[ -d "$ROOT/build/openwrt" ] || { echo "run recipe/prepare.sh first" >&2; exit 1; }
+TREE="$ROOT/build/openwrt"
+[ -f "$TREE/.xe3000-prepared" ] || { echo "build/openwrt is missing or not fully prepared: run recipe/prepare.sh first" >&2; exit 1; }
+pinned=""
+# the pin file is the single pins.* file next to this script
+for pinfile in "$HERE"/pins.*; do
+	while IFS='=' read -r key value; do
+		if [ "$key" = "OPENWRT_COMMIT" ]; then pinned="$value"; fi
+	done <"$pinfile"
+done
+stamped="$(tr -d '[:space:]' <"$TREE/.xe3000-prepared")"
+head="$(git -C "$TREE" rev-parse HEAD 2>/dev/null || true)"
+if [ -z "$pinned" ] || [ "$head" != "$pinned" ] || [ "$stamped" != "$pinned" ]; then
+	echo "build/openwrt does not match the pinned commit (prepare.sh must be re-run on a fresh build/openwrt)" >&2
+	exit 1
+fi
 
 # Network is needed for feeds and downloads. No capabilities, no privilege escalation, bounded pids.
 # shellcheck disable=SC2086

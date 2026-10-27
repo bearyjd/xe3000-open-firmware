@@ -89,21 +89,30 @@ fi
 [ ! -e "$DEST" ] || die "destination exists: $DEST (remove it yourself to start fresh)"
 mkdir -p "$BUILD_DIR"
 
-git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$OPENWRT_TAG" "$OPENWRT_REPO" "$DEST"
-head="$(git -C "$DEST" rev-parse HEAD)"
+# Build in a scratch dir next to DEST; DEST only appears once every check and patch has succeeded.
+tmp="$(mktemp -d "$BUILD_DIR/.openwrt.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT
+work="$tmp/openwrt"
+
+git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$OPENWRT_TAG" "$OPENWRT_REPO" "$work"
+head="$(git -C "$work" rev-parse HEAD)"
 [ "$head" = "$OPENWRT_COMMIT" ] || die "tag $OPENWRT_TAG resolves to $head which does not match the pinned commit $OPENWRT_COMMIT"
 
 for patch in "$HERE"/patches/tree/*.patch; do
-	git -C "$DEST" apply --whitespace=nowarn "$patch"
+	git -C "$work" apply --whitespace=nowarn "$patch" || die "tree patch failed: $patch"
 done
 
-pending="$DEST/target/linux/generic/pending-$KVER"
+pending="$work/target/linux/generic/pending-$KVER"
 [ -d "$pending" ] || die "missing $pending (kernel version changed upstream?)"
 cp "$HERE"/patches/kernel/*.patch "$pending/"
 
-mkdir -p "$DEST/files" "$DEST/package/xe3000"
-cp -a "$HERE/files/." "$DEST/files/"
-cp -a "$HERE/feeds/xe3000/." "$DEST/package/xe3000/"
-cp "$HERE/config/xe3000.config" "$DEST/.config"
+mkdir -p "$work/files" "$work/package/xe3000"
+cp -a "$HERE/files/." "$work/files/"
+cp -a "$HERE/feeds/xe3000/." "$work/package/xe3000/"
+cp "$HERE/config/xe3000.config" "$work/.config"
+printf '%s\n' "$head" >"$work/.xe3000-prepared"
+
+mkdir -p "$(dirname "$DEST")"
+mv "$work" "$DEST"
 
 echo "prepared $DEST at $OPENWRT_TAG ($head)"
