@@ -1,0 +1,331 @@
+# Independent pre-flight rules for PRP 0001. Deliberately NOT derived from scripts/recon/redact.py and
+# does not extend gitleaks' defaults: a bug in one rule set must not hide in the other.
+# Regexes are Go RE2 (no look-around). Placeholders look like <REDACTED:rule>; every value class below
+# excludes a leading '<' so a redacted value never matches.
+title = "xe3000-open-firmware recon pre-flight"
+
+[[rules]]
+id = "uci-secret-option"
+description = "UCI option/list with a credential-like name (password, token, secret, psk...): any value"
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:\S*(?:pass|passwd|password|passphrase|secret|token|psk|pwd|cred|cookie|bind_?code|auth_?code|pair\w*code|activation_?code)\S*)[ \t]+['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "uci-ambiguous-option"
+description = "UCI option/list with an ambiguous name (key, auth, sid, hash, cert...); plain settings are allowed"
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:\S*(?:key|private|auth|hash|cert|username)\S*|(?:\S*[_.\-])?sid)[ \t]+['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^(\d{1,2}|true|false|yes|no|on|off|none|present|absent|chap|pap|mschap\w*|eap|sae|rsa|ec|ecdsa|ed25519|aes\d*|strict|relaxed|wpa[\w+-]*|sha\d+|md5|crc32c?|(/[^\s/]+)+)['"]?$''']
+
+[[rules]]
+id = "wifi-psk-line"
+description = "hostapd/wpa_supplicant style credential line"
+regex = '''(?im)\b(?:psk|sae_password|wpa_passphrase|password)[ \t]*=[ \t]*([^\s<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "wg-key-line"
+description = "WireGuard PrivateKey/PresharedKey line"
+regex = '''(?i)\b(?:PrivateKey|PresharedKey)[ \t]*=[ \t]*([^\s<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "wg-key-option"
+description = "UCI private_key/preshared_key option"
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:private_key|preshared_key)[ \t]+['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "wg-base64-44"
+description = "Standalone 44-character base64 blob (WireGuard key shape)"
+regex = '''(?:^|[^A-Za-z0-9+/=])([A-Za-z0-9+/]{43}=)(?:[^A-Za-z0-9+/=]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "private-key-pem"
+description = "PEM private key block"
+regex = '''(?s)-----BEGIN[ A-Za-z0-9]*(?:PRIVATE KEY( BLOCK)?|OpenVPN Static key V1)-----.{20,}?-----END[ A-Za-z0-9]*(?:PRIVATE KEY( BLOCK)?|OpenVPN Static key V1)-----'''
+
+[[rules]]
+id = "private-key-begin"
+description = "Private key header, even when the block is unterminated"
+regex = '''-----BEGIN[ A-Za-z0-9]*(?:PRIVATE KEY( BLOCK)?|OpenVPN Static key V1)-----'''
+
+[[rules]]
+id = "crypt-hash"
+description = "crypt(3) password hash"
+regex = '''\$(?:1|5|6|y|p)\$[./0-9A-Za-z$,=-]{6,}'''
+
+[[rules]]
+id = "imei-like-digit-run"
+description = "Bare 15-digit run (IMEI/IMSI shape)"
+regex = '''(?:^|[^0-9A-Za-z])(\d{15})(?:[^0-9A-Za-z]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "imei-label"
+description = "Value after an IMEI/MEID label"
+regex = '''(?i)\b(?:imei|meid)\b[\s:='"]{0,6}([0-9A-Fa-f]{14,18})'''
+secretGroup = 1
+
+[[rules]]
+id = "imsi-label"
+description = "Value after an IMSI label"
+regex = '''(?i)\bimsi\b[\s:='"]{0,6}(\d{6,15})'''
+secretGroup = 1
+
+[[rules]]
+id = "iccid"
+description = "SIM ICCID: 89 plus 17-18 digits"
+regex = '''(?:^|[^0-9A-Za-z])(89\d{17,18}F?)(?:[^0-9A-Za-z]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "iccid-label"
+description = "Value after an ICCID label"
+regex = '''(?i)\biccid\b[\s:='"]{0,6}(\d{10,22}f?)'''
+secretGroup = 1
+
+[[rules]]
+id = "bearer-token"
+description = "HTTP bearer credential"
+regex = '''(?i)\bbearer[ \t]+([A-Za-z0-9._~+/=-]{16,})'''
+secretGroup = 1
+
+[[rules]]
+id = "api-key-sk"
+description = "sk- style API key"
+regex = '''\b(sk-[A-Za-z0-9_-]{20,})'''
+secretGroup = 1
+
+[[rules]]
+id = "json-secret-value"
+description = "JSON string value under a secret-looking key (ubus type names are not values)"
+regex = '''(?i)"[^"\n]*(?:pass|psk|token|secret|sid|hash|key|auth|cert|username|pwd|cred|session)[^"\n]*"\s*:\s*"([^"<\n][^"\n]*)"'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''^(String|Integer|Boolean|Number|Object|Array|Double|string|integer|boolean|number|object|array|double)$''']
+
+[[rules]]
+id = "json-pin-number"
+description = "JSON PIN/PUK value"
+regex = '''(?i)"(?:[^"\n]*[^a-z"\n])?(?:pin|pincode|puk)(?:[^a-z"\n][^"\n]*)?"\s*:\s*"?(\d{3,10})'''
+secretGroup = 1
+
+[[rules]]
+id = "json-rpc-sid"
+description = "First positional parameter (session id) of a JSON-RPC call"
+regex = '''(?i)"params"\s*:\s*\[\s*"([^"<\s]{8,})"'''
+secretGroup = 1
+
+[[rules]]
+id = "uci-set-secret"
+description = "uci set/add_list of a secret-looking option"
+regex = '''(?i)\buci[ \t]+(?:-\S+[ \t]+)*(?:set|add_list)[ \t]+\S*(?:pass|psk|key|secret|token|private|auth|sid|hash|cert|username)\S*?=['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "assign-secret-name"
+description = "NAME=value where NAME ends in a password/psk-like word (any prefix, e.g. ap_password=)"
+regex = '''(?i)(?:^|[^A-Za-z0-9])[A-Za-z0-9_.\-]*(?:psk|passw(?:or)?d|passphrase)[ \t]*=[ \t]*['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "generic-quoted-entropy"
+description = "High-entropy quoted string of 20+ characters (catches formats no rule knows)"
+regex = '''['"]([A-Za-z0-9+/_=\-]{20,})['"]'''
+entropy = 3.5
+secretGroup = 1
+
+[[rules]]
+id = "generic-assigned-entropy"
+description = "High-entropy value of 24+ characters after = or :"
+regex = '''(?m)[=:][ \t]*([A-Za-z0-9+/_=\-]{24,})(?:[ \t]|$)'''
+entropy = 4.0
+secretGroup = 1
+
+[[rules]]
+id = "assign-labelled-secret"
+description = "NAME=value, NAME: value, NAME => value, NAME:: value or NAME<TAB>value where NAME is a credential (password, token, secret, psk...): any value"
+regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:psk|passwd|password|passphrase|secret|token|cookie|pwd|cred)|(?:key|secret|psk|password|passwd|passphrase|token|pass|pwd)[_.\-][A-Za-z0-9_.\-]*)[0-9]*(?:[ \t]*(?:=>|::|[=:：])[ \t]*|\t+)("[^"\n<]+"|'[^'\n<]+'|[^\s"'<=:>|]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "line"
+regexes = ['''(?i)(?:^|[^A-Za-z0-9])[A-Za-z0-9_.\-]*(?:key_mgmt|password_file|password_policy|secret_type|token_bucket|hash_type|passphrase_file|key_type|key_len\w*|key_id|key_size)[0-9]*[ \t]*[=:]\s*["']?(?:\d{1,2}|wpa[\w+-]*|sae|eap|none|strict|relaxed|sha\d+|md5|crc32c?|rsa|ec|ecdsa|ed25519|aes\d*|(?:/[^\s/]+)+)["']?\s*$''']
+
+[[rules]]
+id = "assign-ambiguous-secret"
+description = "NAME=value where NAME is ambiguous (key, auth, sid, hash, pin...); plain settings are allowed"
+regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:key|auth|hash)|(?:[A-Za-z0-9_.\-]*[_.\-])?(?:sid|pin|puk|pass))[0-9]*(?:[ \t]*(?:=>|::|[=:：])[ \t]*|\t+)("[^"\n<]+"|'[^'\n<]+'|[^\s"'<=:>|]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^["']?(\d{1,2}|true|false|yes|no|on|off|none|null|present|absent|string|integer|boolean|number|object|array|double|crc32c?|md5|sha\d+|eap|sae|strict|relaxed|rsa|ec|ecdsa|ed25519|aes\d*|chap|pap|mschap\w*|wpa[\w+-]*|(/[^\s/]+)+)["']?$''']
+
+[[rules]]
+id = "authorization-header"
+description = "Authorization header credential (any scheme)"
+regex = '''(?im)\bauthorization[ \t]*[:=][ \t]*[A-Za-z][\w-]*[ \t]+([^\s<]\S{5,})'''
+secretGroup = 1
+
+[[rules]]
+id = "authorization-header-single"
+description = "Authorization header carrying a bare credential (no scheme) to end of line"
+regex = '''(?im)\bauthorization[ \t]*[:=][ \t]*([^\s<]\S{5,})[ \t]*$'''
+secretGroup = 1
+
+[[rules]]
+id = "url-userinfo"
+description = "Password inside scheme://user:password@host"
+regex = '''(?i)\b[a-z][a-z0-9+.\-]*://[^\s/:@'"<>]+:([^\s/@'"<>]+)@'''
+secretGroup = 1
+
+[[rules]]
+id = "cli-user-flag"
+description = "curl -u user:pass / --user user:pass"
+regex = '''(?:^|\s)(?:-u|--user)(?:[ \t]+|=)[^\s:]+:([^\s<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "cli-password-flag"
+description = "--password VALUE / --password=VALUE"
+regex = '''--(?:password|passwd|passphrase)(?:[ \t]+|=)([^\s<-]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "cli-command-password"
+description = "-p/-P/-w VALUE for tools that take a password that way"
+regex = '''\b(?:sshpass|mysql|mysqladmin|mosquitto_pub|mosquitto_sub|redis-cli|smbclient|ldapsearch|ldapadd|ldapmodify)\b[^\n|;&]*?[ \t](?:-p|-P|-w)(?:[ \t]+|=)?([^\s<-]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "pppd-password"
+description = "pppd ... password VALUE"
+regex = '''\bpppd\b[^\n]*?\bpassword[ \t]+([^\s<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "chpasswd-pipe"
+description = "echo user:password | chpasswd"
+regex = '''(?:echo|printf)[ \t]+(?:-\w+[ \t]+)*['"]?[\w.\-]+:([^|\n'"<]+?)['"]?[ \t]*\|[ \t]*chpasswd'''
+secretGroup = 1
+
+[[rules]]
+id = "hex-64"
+description = "64 hex digits (WPA PSK / PMK shape)"
+regex = '''(?i)(?:^|[^0-9a-f])([0-9a-f]{64})(?:[^0-9a-f]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "base64-blob"
+description = "Unlabelled base64 blob of 24+ characters ending in ="
+regex = '''(?:^|[^A-Za-z0-9+/=])([A-Za-z0-9+/]{23,}={1,2})(?:[^A-Za-z0-9+/=]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "ipsec-secrets-line"
+description = "ipsec.secrets style ': PSK \"value\"'"
+regex = '''(?i):[ \t]*(?:psk|rsa|ecdsa|eap|xauth|ntlm|pin)[ \t]+("[^"<\n]{3,}"|'[^'<\n]{3,}'|0[sx]\S+)'''
+secretGroup = 1
+
+[[rules]]
+id = "wpa-psk-file-line"
+description = "hostapd wpa_psk_file line: [keyid=ID] MAC PASSPHRASE"
+regex = '''(?m)^(?:keyid=\S+[ \t]+)?(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}[ \t]+([^\s<]\S*)[ \t]*$'''
+secretGroup = 1
+
+[[rules]]
+id = "xml-secret-element"
+description = "XML element whose tag name looks secret"
+regex = '''(?i)<([A-Za-z_][\w:.\-]*(?:password|passwd|psk|secret|token|key|pwd|passphrase|credential))\b[^<>]*>([^<>\n]{3,})</'''
+secretGroup = 2
+
+[[rules]]
+id = "html-secret-input"
+description = "HTML tag that is a password/secret field, with a value attribute"
+regex = '''(?i)<[a-z]+\b[^<>]*\b(?:type=["']password["']|name=["'][^"']*(?:pw|pass|psk|secret|token|key)[^"']*["'])[^<>]*\bvalue=["']([^"'<]{3,})["']'''
+secretGroup = 1
+
+[[rules]]
+id = "at-secret-command"
+description = "AT command carrying a PIN or credential"
+regex = '''(?i)\bAT\+(?:CPIN|CLCK|CPWD|QICSGP|CGAUTH)=([^\s'<]+)'''
+secretGroup = 1
+
+[[rules]]
+id = "inline-key-block"
+description = "OpenVPN-style inline secret/key block"
+regex = '''(?is)<(?:secret|tls-auth|tls-crypt|tls-crypt-v2|auth-user-pass|key|pkcs12)>\s*([^<\s][^<]{15,}?)\s*</'''
+secretGroup = 1
+
+[[rules]]
+id = "bare-keyword-line"
+description = "password/passwd/passphrase/psk/secret/token followed by a space and a value, no separator"
+regex = '''(?im)^[ \t]*(?:password|passwd|passphrase|psk|secret|token)[ \t]+([^\s<-][^\n]*?)[ \t]*$'''
+secretGroup = 1
+
+[[rules]]
+id = "jshn-add-secret"
+description = "json_add_string/int NAME VALUE with a secret-looking NAME"
+regex = '''(?i)\bjson_add_(?:string|int|boolean)[ \t]+\S*(?:pass|psk|key|secret|token|pin|puk)\S*[ \t]+("[^"\n<]*"|[^\s<"]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^["']?(\d{1,2}|true|false|none|wpa[\w+-]*|sae|eap|rsa|sha\d+|chap|pap)["']?$''']
+
+[[rules]]
+id = "uci-set-function-secret"
+description = "uci_set CONFIG SECTION OPTION VALUE with a secret-looking OPTION"
+regex = '''(?i)\buci_set[ \t]+\S+[ \t]+\S+[ \t]+\S*(?:pass|psk|key|secret|token|pin|puk)\S*[ \t]+("[^"\n<]*"|[^\s<"]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^["']?(\d{1,2}|true|false|none|wpa[\w+-]*|sae|eap|rsa|sha\d+|chap|pap)["']?$''']
+
+[[rules]]
+id = "lua-uci-set-secret"
+description = "uci:set(config, section, option, value) with a secret-looking option"
+regex = '''(?i):set\(\s*"[^"]*"\s*,\s*"[^"]*"\s*,\s*"[^"]*(?:pass|psk|key|secret|token|pin|puk|bindcode|bind_code)[^"]*"\s*,\s*"([^"<]+)"'''
+secretGroup = 1
+
+[[rules]]
+id = "echo-entropy-word"
+description = "High-entropy word passed to echo/printf"
+regex = '''(?m)\b(?:echo|printf)\b[^\n]*?(?:^|[\s'"|=])([A-Za-z0-9+_=\-][A-Za-z0-9+/_=.\-]{19,})(?:[\s'";>|]|$)'''
+entropy = 3.5
+secretGroup = 1
+
+[[rules]]
+id = "lone-entropy-line"
+description = "A line that is one high-entropy word (heredoc body, token file)"
+regex = '''(?m)^[ \t]*([A-Za-z0-9+_=\-][A-Za-z0-9+/_=.\-]{19,})[ \t]*$'''
+entropy = 4.0
+secretGroup = 1
+
+[[rules]]
+id = "base64-unpadded"
+description = "Unpadded base64 (also with / and +) of 32+ characters"
+regex = '''(?:^|[^A-Za-z0-9+/=_\-])([A-Za-z0-9+/]{32,})(?:[^A-Za-z0-9+/=_\-]|$)'''
+entropy = 4.3
+secretGroup = 1
+
+[[rules]]
+id = "url-query-code"
+description = "?code= / &bind_code= style pairing codes in URLs"
+regex = '''(?i)[?&](?:code|bind_code|pair_code|activation_code)=([^&\s'"<>]{6,})'''
+secretGroup = 1
+
+[[rules]]
+id = "device-serial-label"
+description = "serialno=/SerialNumber:/serial number: labelled device serials"
+regex = '''(?i)\b(?:androidboot\.serialno|serialno|serial[ _\-]?number|serialnumber)\b[ \t]*[=:][ \t]*([A-Za-z0-9_.\-]{4,})'''
+secretGroup = 1
+
+[[rules]]
+id = "device-serial-plain"
+description = "Serial: followed by an id-like value of 8+ characters"
+regex = '''(?i)\bserial\b[ \t]*:[ \t]*([A-Za-z0-9\-]{8,})\b'''
+secretGroup = 1

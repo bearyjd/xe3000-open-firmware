@@ -1,0 +1,103 @@
+import base64
+import random
+import uuid
+
+"""Third-round adversarial cases (reviewer attack3/cases.py), with a seeded RNG so every run uses the same fakes.
+Nothing secret-looking is committed: every value is generated at import time."""
+_R = random.Random(20261026)
+_URLSAFE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+class secrets:  # noqa: N801 - drop-in for the module name used by the original file
+    @staticmethod
+    def token_hex(n): return _R.randbytes(n).hex()
+    @staticmethod
+    def token_bytes(n): return _R.randbytes(n)
+    @staticmethod
+    def randbelow(n): return _R.randrange(n)
+
+# runtime-assembled fake secrets so no literal secret sits in source
+def mk(n=24): return "".join(_R.choice(_URLSAFE) for _ in range(n))
+def hx(n=64): return _R.randbytes(n // 2).hex()
+WIFI=mk(18); ADMIN=mk(14); PPP=mk(16); APNPW=mk(12); CLTOK=mk(40); BIND=mk(10)
+MQTT=mk(20); TR069=mk(16); SIMPIN=str(secrets.randbelow(9000)+1000); HEXK=hx(64)
+WGPRIV=base64.b64encode(secrets.token_bytes(32)).decode(); DDNS=mk(22)
+B64T=base64.b64encode(secrets.token_bytes(30)).decode(); UUIDT=str(uuid.UUID(int=_R.getrandbits(128)))
+OVPNK=base64.b64encode(secrets.token_bytes(48)).decode(); IMEI="356938035643809"
+ICCID="8901260123456789012"; IMSI="310260123456789"; BEAR=mk(32)
+SSHKEY="AAAAB3NzaC1yc2E"+base64.b64encode(secrets.token_bytes(100)).decode()
+# each case: (id, text, secret_that_must_not_leak, note)
+C=[]
+def add(i,t,s,n=""): C.append((i,t,s,n))
+
+add("glmodem-apn-pw", "config modem 'cellular'\n\toption apn 'internet'\n\toption username 'web'\n\toption password '%s'\n"%APNPW, APNPW, "5G modem APN pw")
+add("glmodem-pincode", "config sim\n\toption pincode '%s'\n"%SIMPIN, SIMPIN, "SIM PIN")
+add("glmodem-at-cpin", "gcom -d /dev/ttyUSB3 AT+CPIN=%s\n"%SIMPIN, SIMPIN, "AT CPIN")
+add("glmodem-at-cgauth", 'sendat "AT+CGAUTH=1,1,\\"web\\",\\"%s\\""\n'%APNPW, APNPW, "AT CGAUTH pw")
+add("glmodem-qicsgp", "AT+QICSGP=1,1,\"internet\",\"web\",\"%s\",3\n"%APNPW, APNPW, "AT QICSGP")
+add("imei-label", "option imei '%s'\n"%IMEI, IMEI, "IMEI")
+add("iccid-bare", "ICCID %s detected\n"%ICCID, ICCID, "ICCID")
+add("imsi-label", "IMSI: %s\n"%IMSI, IMSI, "IMSI")
+add("wireless-psk", "config wifi-iface\n\toption encryption 'psk2'\n\toption key '%s'\n"%WIFI, WIFI, "wifi key")
+add("wireless-sae", "\toption sae_password '%s'\n"%WIFI, WIFI, "sae pw")
+add("hostapd-wpapass", "wpa_passphrase=%s\n"%WIFI, WIFI, "hostapd")
+add("wpa-suppl-psk", 'network={\n\tssid="home"\n\tpsk="%s"\n}\n'%WIFI, WIFI, "wpa_supplicant")
+add("wg-privkey-uci", "config wireguard_wg0\n\toption private_key '%s'\n"%WGPRIV, WGPRIV, "wg priv uci")
+add("wg-privkey-conf", "[Interface]\nPrivateKey = %s\n"%WGPRIV, WGPRIV, "wg conf")
+add("wg-psk-conf", "[Peer]\nPresharedKey = %s\n"%WGPRIV, WGPRIV, "wg psk")
+_K1, _K2 = hx(32), hx(32)
+add("ovpn-inline-key", "<tls-crypt>\n-----BEGIN OpenVPN Static key V1-----\n%s\n%s\n-----END OpenVPN Static key V1-----\n</tls-crypt>\n"%(_K1,_K2), _K1[:16], "ovpn tls-crypt (static)")
+add("ovpn-inline-secret", "<secret>\n%s\n</secret>\n"%OVPNK, OVPNK, "ovpn <secret> blob")
+add("ddns-token", "config service\n\toption password '%s'\n"%DDNS, DDNS, "ddns pw")
+add("ddns-url-token", "\toption update_url 'https://api.dyn.com/nic/update?token=%s'\n"%DDNS, DDNS, "ddns url token")
+add("gl-cloud-token", 'config gl-cloud\n\toption token "%s"\n'%CLTOK, CLTOK, "GL cloud token")
+add("goodcloud-bind", "config goodcloud\n\toption bind_code '%s'\n"%BIND, BIND, "goodcloud bind code")
+add("gl-cloud-json", '{"device_token":"%s","mac":"e4:95:6e:40:aa:bb"}\n'%CLTOK, CLTOK, "cloud json")
+add("rtty-token", "config rtty\n\toption token '%s'\n"%CLTOK, CLTOK, "rtty token")
+add("mqtt-cli", "mosquitto_pub -h cloud -u dev -P %s -t up\n"%MQTT, MQTT, "mqtt pw")
+add("mqtt-conf", "password %s\n"%MQTT, MQTT, "mqtt bare password line")
+add("tr069-acs", "config tr069\n\toption acs_password '%s'\n"%TR069, TR069, "tr069 acs pw")
+add("tr069-conn", "\toption connection_request_password '%s'\n"%TR069, TR069, "tr069 conn pw")
+add("ssh-authkeys", "ssh-rsa %s root@host\n"%SSHKEY, SSHKEY[:40], "authorized_keys pubkey (should NOT leak private but pub is fine)")
+_H40 = hx(40)
+add("passwd-hash", "root:$6$abcd$%s:19000:0:99999:7:::\n"%_H40, _H40[:20], "/etc/passwd hash")
+add("chpasswd", "echo 'root:%s' | chpasswd\n"%ADMIN, ADMIN, "chpasswd")
+add("passwd-pipe", "(echo %s; echo %s) | passwd root\n"%(ADMIN,ADMIN), ADMIN, "passwd pipe")
+_SID = hx(32)
+add("luci-session", '{"ubus_rpc_session":"%s"}\n'%_SID, _SID, "luci session sid")
+add("ubus-rpc-sid", '{"jsonrpc":"2.0","method":"call","params":["%s","session","get"]}\n'%_SID, _SID, "ubus rpc sid")
+add("dnsmasq-dhcp-host", "dhcp-host=e4:95:6e:40:11:22,192.168.8.50,myhost\n", "e4:95:6e:40:11:22", "dnsmasq MAC")
+add("env-cloud-token", "export GL_CLOUD_TOKEN=%s\n"%CLTOK, CLTOK, "shell export")
+add("bearer-header", "Authorization: Bearer %s\n"%BEAR, BEAR, "bearer")
+add("url-userinfo", "curl https://admin:%s@router.local/api\n"%ADMIN, ADMIN, "url userinfo")
+add("hex64-key", "option key '%s'\n"%HEXK, HEXK, "hex64 psk")
+add("b64-blob", "secret_blob=%s\n"%B64T, B64T, "b64 blob")
+add("uuid-token", "device_secret: %s\n"%UUIDT, UUIDT, "uuid secret")
+add("sshpass", "sshpass -p %s ssh root@10.0.0.1\n"%ADMIN, ADMIN, "sshpass")
+add("heredoc-cred", "cat <<EOF >/etc/x\nPASSWORD=%s\nEOF\n"%ADMIN, ADMIN, "heredoc var")
+add("lua-setpass", 'uci:set("glcloud","main","token","%s")\n'%CLTOK, CLTOK, "lua uci set")
+add("js-token", 'const token = "%s";\n'%CLTOK, CLTOK, "js assignment")
+add("json-password", '{"wifi":{"password":"%s"}}\n'%WIFI, WIFI, "json nested pw")
+add("pppoe-uci", "config interface 'wan'\n\toption username 'user@isp'\n\toption password '%s'\n"%PPP, PPP, "pppoe uci")
+add("ppp-secrets", '"user@isp" * "%s" *\n'%PPP, PPP, "/etc/ppp chap-secrets style")
+add("pppd-cmd", "pppd call wan password %s\n"%PPP, PPP, "pppd cmd")
+add("ipsec-psk", ': PSK "%s"\n'%ADMIN, ADMIN, "ipsec.secrets PSK")
+add("wpa-psk-file", "e4:95:6e:40:aa:bb %s\n"%WIFI, WIFI, "wpa_psk_file line")
+add("wpasupp-eap-pw", '\tpassword="%s"\n'%ADMIN, ADMIN, "eap pw")
+add("modem-imei-dmesg", "[  12.3] modem: registered IMEI=%s on band n78\n"%IMEI, IMEI, "dmesg IMEI")
+_SER = hx(16)
+add("proc-cmdline", "console=ttyMSM0 androidboot.serialno=%s root=/dev/mtdblock\n"%_SER, _SER, "cmdline serial")
+add("xml-password", "<admin><password>%s</password></admin>\n"%ADMIN, ADMIN, "xml element")
+add("html-pw-input", '<input type="password" name="pw" value="%s">\n'%ADMIN, ADMIN, "html input")
+add("yaml-token", "credentials:\n  token: %s\n"%CLTOK, CLTOK, "yaml token")
+add("yaml-block", "privkey: |\n  %s\n"%WGPRIV, WGPRIV, "yaml block")
+add("rpcd-login", "config login\n\toption username 'root'\n\toption password '%s'\n"%ADMIN, ADMIN, "rpcd acl login")
+add("gl-cloud-mqtt-env", "MQTT_PASS='%s'\n"%MQTT, MQTT, "mqtt env var")
+add("wg-endpoint-key", "wg set wg0 peer %s preshared-key /tmp/psk\n"%WGPRIV, WGPRIV, "wg set peer (pubkey arg)")
+add("cloud-bind-url", "https://goodcloud.xyz/bind?code=%s&mac=xx\n"%BIND, BIND, "bind url param")
+add("sim-puk", "option puk '%s'\n"%(SIMPIN+SIMPIN), SIMPIN+SIMPIN, "SIM PUK")
+add("access-token-json", '{"access_token":"%s","expires":3600}\n'%CLTOK, CLTOK, "oauth json")
+add("mysql-cmd", "mysql -u root -p%s mydb\n"%ADMIN, ADMIN, "mysql -p")
+_AK = base64.b64encode(secrets.token_bytes(32)).decode()
+add("authkeys-opts", 'command="/bin/x",no-pty ssh-ed25519 %s key\n'%_AK, _AK, "authorized_keys w/ options (key blob redacted)")
+CASES = C

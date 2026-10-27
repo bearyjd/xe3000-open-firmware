@@ -1,4 +1,4 @@
-# passerelle
+# xe3000-open-firmware
 
 An up-to-date, reproducible OpenWrt for the **GL.iNet GL-XE3000 (Puli AX)**.
 
@@ -28,8 +28,10 @@ Phase 0 — scaffold and LLM-assisted recon engine, built and tested on syntheti
 |------|---------|
 | `docs/prp/` | Product requirement prompts (written before implementation, with devil's-advocate review) |
 | `docs/findings/` | Generated findings (from `findings/raw/`) |
-| `scripts/` | `recon/` engine, harvest + redaction tooling |
-| `containers/` | Podman build/analysis images |
+| `scripts/` | `recon/` engine plus redaction, pre-flight and analyze entry points. Harvest tooling (`scripts/remote/collect.sh`) is Phase 1, planned, not written yet |
+| `containers/` | Podman build/analysis image, pinned gitleaks image digest, independent `gitleaks.toml` |
+| `tests/` | Offline pytest suite (FakeClient, runtime-generated fixtures) |
+| `justfile` | `build`, `test`, `preflight`, `redact`, `redact-unpacked`, `analyze`, `dry-run` (`PODMAN` env selects the podman command) |
 | `hooks/` | Git hooks (`scripts/install-hooks.sh` enables them) |
 
 ## Setup
@@ -38,6 +40,14 @@ Phase 0 — scaffold and LLM-assisted recon engine, built and tested on syntheti
 scripts/install-hooks.sh        # blocks committing .env / Anthropic keys
 cp .env.example .env            # then fill in ANTHROPIC_API_KEY yourself
 ```
+
+### Known-secret canaries and the API allowlist
+
+```sh
+just canary-init     # creates ~/.config/xe3000-open-firmware/canaries (mode 0600, empty); add one real secret per line
+```
+
+Canary values must be at least 6 characters, so 4-digit SIM PINs cannot be canaried (they are covered by the AT-command and `pin`/`puk` redaction rules only). `preflight` and `analyze` abort if any canary (plain, URL-encoded, base64 or hex) appears in any input file, printing only the file and line. Keep the file outside the repo; it is mounted read-only into the analyze container and never printed. Only files matching `containers/recon-allowlist.txt` are ever sent to the API; `--allow-extra GLOB` is an explicit, logged opt-in.
 
 ## Roadmap
 

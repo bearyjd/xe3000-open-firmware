@@ -1,25 +1,36 @@
 #!/usr/bin/env bash
-# Blocks commits that stage .env files, harvest/raw/ content, or anything that looks like an Anthropic key.
+# Blocks commits that stage .env files, private data zones, or anything that looks like an Anthropic key.
 # Install: scripts/install-hooks.sh (sets core.hooksPath=hooks)
 set -u
+shopt -s nocasematch
 fail=0
-staged=$(git diff --cached --name-only --diff-filter=ACMR)
 
-while IFS= read -r f; do
-  [ -z "$f" ] && continue
+# NUL-separated names: survives spaces, newlines and non-ASCII paths (no octal quoting). No --diff-filter:
+# renames, copies and type changes are checked too.
+while IFS= read -r -d '' f; do
   case "$f" in
-    .env.example) ;;
+    .env.example|*/.env.example) ;;
     .env|.env.*|*/.env|*/.env.*)
       echo "pre-commit: BLOCKED staged env file: $f" >&2; fail=1 ;;
-    harvest/raw/*|cache/*|findings/raw/*|unpacked/*)
+    harvest/raw/*|harvest/redacted/*|cache/*|findings/raw/*|unpacked/*)
       echo "pre-commit: BLOCKED staged private path: $f" >&2; fail=1 ;;
   esac
-done <<< "$staged"
+done < <(git diff --cached --name-only -z)
 
-# Anthropic keys: sk-ant-<type>-<long token>. Scan only added lines; never print the match.
-if git diff --cached -U0 --diff-filter=ACMR | grep -E '^\+' | grep -v '^+++' \
-     | grep -Eq 'sk-ant-[A-Za-z0-9_-]{20,}'; then
-  echo "pre-commit: BLOCKED staged content matches an Anthropic API key pattern (match not shown)" >&2
-  fail=1
-fi
+# Anthropic keys: sk-ant-<type>-<long token>. Scan the complete staged blob of every added/copied/modified/renamed/
+# type-changed file (not diff lines: a content line starting with "++" would look like a diff header). Fail closed if a
+# blob cannot be read. The key is never printed.
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+while IFS= read -r -d '' f; do
+  if ! git show ":$f" > "$tmp" 2>/dev/null; then
+    echo "pre-commit: BLOCKED could not read staged file '$f' (failing closed)" >&2
+    fail=1
+    continue
+  fi
+  if grep -aEq 'sk-ant-[A-Za-z0-9_-]{20,}' "$tmp"; then
+    echo "pre-commit: BLOCKED staged file '$f' matches an Anthropic API key pattern (match not shown)" >&2
+    fail=1
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACMRT -z)
 exit $fail

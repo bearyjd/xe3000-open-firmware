@@ -1,0 +1,44 @@
+# Default-deny allowlist: only files matching one of these globs (relative to harvest/redacted or unpacked)
+# may be sent to the API. Everything else is listed under `denied` in the run manifest and never sent.
+# `*` stays inside one directory, `**` crosses directories. Add more for one run with `--allow-extra GLOB`
+# (explicit and logged); edit this file in a reviewed commit for permanent changes.
+#
+# Deliberately NOT here: ps, logread, crontabs, etc/config/{wireless,network,rpcd,vpn*,wireguard*,ddns,openvpn,...},
+# shadow, HAR captures, /proc/net/*.
+
+# init and hotplug scripts
+etc/init.d/*
+etc/rc.d/*
+etc/hotplug.d/**
+
+# hardware-related UCI configs, by name only
+etc/config/glmodem
+etc/config/modem
+etc/config/led
+etc/config/fan
+etc/config/glfan
+etc/config/gl_fan
+etc/config/gl_led
+etc/config/mcu
+etc/config/gl_mcu
+etc/config/battery
+
+# kernel and board state
+proc/cmdline
+proc/mtd
+proc/partitions
+proc/modules
+proc/lsmod*
+lsmod*
+var/dmesg*
+dmesg*
+sys/**/*.dts
+sys/**/*.dtsi
+sys/*.dts
+sys/*.dtsi
+
+# ubus method lists and modem port owners (names only, no calls)
+ubus/list*
+ubus-list*
+modem/ports*
+modem/port-owners*
