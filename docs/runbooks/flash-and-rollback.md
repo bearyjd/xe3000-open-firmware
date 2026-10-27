@@ -23,7 +23,10 @@ The XE3000 is the production home router. Do not start unless you can live witho
 Do this from a shell on the router, with the backup written to external storage or streamed to the laptop. Reads only:
 
 - List the partitions: `cat /proc/partitions` and `ls -l /dev/disk/by-partlabel/`.
-- For each partition (at minimum the bootloader/FIP, factory/calibration data, kernel, rootfs, and any GL data partition): `dd if=/dev/disk/by-partlabel/<name> bs=1M | sha256sum`, then again with the output going to a file on the laptop, and compare the two checksums.
+- For each partition (at minimum the bootloader/FIP, factory/calibration data, kernel, rootfs, and any GL data partition), read it twice, once to a file on the laptop and once more to compare. Run the router side in a shell with `set -o pipefail` and check the exit status of every stage (`dd`, the transport, and `sha256sum`); a pipeline that only reports the last stage hides read failures. In a shell without pipefail, check `PIPESTATUS` or write to a file and check `$?` before hashing.
+  - Example per partition: `dd if=/dev/disk/by-partlabel/<name> bs=1M` piped to the transport or to `sha256sum`, with all stages required to exit 0.
+- Verify the byte count of each backup against the device size, not just the checksum. Get the expected size with `blockdev --getsize64 /dev/disk/by-partlabel/<name>` (or from `/sys/class/block/<dev>/size` times 512) and compare it with `wc -c` of the saved file. A backup whose byte count differs is incomplete and must be redone.
+- Only after the exit statuses and byte counts are right, compare the checksums of the two reads. Matching checksums alone prove nothing: two identically truncated reads (the same failure twice) produce matching checksums, so a truncated backup would look verified.
 - The factory (calibration) partition is the one that cannot be re-created. Keep two copies.
 
 Store the backup somewhere off the router. The backup contains device-unique data, so it is never committed to this repository and never sent to any API.
