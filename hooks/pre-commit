@@ -17,10 +17,20 @@ while IFS= read -r -d '' f; do
   esac
 done < <(git diff --cached --name-only -z)
 
-# Anthropic keys: sk-ant-<type>-<long token>. Scan only added lines; never print the match.
-if git diff --cached -U0 | grep -E '^\+' | grep -v '^+++' \
-     | grep -Eq 'sk-ant-[A-Za-z0-9_-]{20,}'; then
-  echo "pre-commit: BLOCKED staged content matches an Anthropic API key pattern (match not shown)" >&2
-  fail=1
-fi
+# Anthropic keys: sk-ant-<type>-<long token>. Scan the complete staged blob of every added/copied/modified/renamed/
+# type-changed file (not diff lines: a content line starting with "++" would look like a diff header). Fail closed if a
+# blob cannot be read. The key is never printed.
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+while IFS= read -r -d '' f; do
+  if ! git show ":$f" > "$tmp" 2>/dev/null; then
+    echo "pre-commit: BLOCKED could not read staged file '$f' (failing closed)" >&2
+    fail=1
+    continue
+  fi
+  if grep -aEq 'sk-ant-[A-Za-z0-9_-]{20,}' "$tmp"; then
+    echo "pre-commit: BLOCKED staged file '$f' matches an Anthropic API key pattern (match not shown)" >&2
+    fail=1
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACMRT -z)
 exit $fail

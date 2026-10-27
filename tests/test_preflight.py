@@ -85,14 +85,14 @@ def _fake_runner(returncode, stdout="[]", stderr=""):
 
 def test_run_preflight_writes_stamp_on_clean(root, fixture_tree):
     res = preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                  image="i@sha256:" + "0" * 64, gitleaks_bin=None, runner=_fake_runner(0))
+                                  image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None, runner=_fake_runner(0))
     assert res.hits == () and res.stamp and res.stamp.exists()
 
 
 def test_run_preflight_hit_no_stamp_and_no_value_in_output(root, fixture_tree, capsys):
     raw = json.dumps([{"RuleID": "r1", "StartLine": 2, "File": "/scan/etc/config/network", "Secret": "REDACTED"}])
     res = preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                  image="i@sha256:" + "0" * 64, gitleaks_bin=None, runner=_fake_runner(7, raw))
+                                  image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None, runner=_fake_runner(7, raw))
     assert res.stamp is None and res.hits == (preflight.Hit("redacted/etc/config/network", 2, "r1"),)
     assert not list((root / "cache" / "preflight").glob("*.ok")) if (root / "cache" / "preflight").exists() else True
 
@@ -100,7 +100,7 @@ def test_run_preflight_hit_no_stamp_and_no_value_in_output(root, fixture_tree, c
 def test_run_preflight_error_exit_raises_without_leaking(root, fixture_tree):
     with pytest.raises(preflight.PreflightError) as ei:
         preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                image="i@sha256:" + "0" * 64, gitleaks_bin=None,
+                                image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None,
                                 runner=_fake_runner(2, "", "secret-ish stderr text"))
     assert "secret-ish" not in str(ei.value) and "2" in str(ei.value)
 
@@ -140,7 +140,8 @@ def _scan(root, dirs):
     podman = shutil.which("podman")
     local = CFG["gitleaks_bin"]
     return preflight.run_preflight(dirs, root, config=GITLEAKS_TOML, podman=None if local else [podman],
-                                   image=preflight.read_image(IMAGE_FILE), gitleaks_bin=local)
+                                   image=preflight.read_image(IMAGE_FILE), gitleaks_bin=local,
+                                   accept_local_binary=bool(local))
 
 
 def _redacted_root(root, tmp_path, disabled):
@@ -229,7 +230,7 @@ def test_leak_exit_with_unparseable_or_empty_report_never_stamps(root, fixture_t
     for stdout in ("", "[]", "null"):
         with pytest.raises(preflight.PreflightError):
             preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                    image="i@sha256:" + "0" * 64, gitleaks_bin=None, runner=_fake_runner(7, stdout))
+                                    image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None, runner=_fake_runner(7, stdout))
     assert not (root / "cache" / "preflight").exists()
 
 
@@ -245,6 +246,113 @@ def test_entropy_rules_catch_what_the_redactor_does_not_know(root, tmp_path):
     rules = {h.file: h.rule for h in res.hits}
     assert set(rules) == {"redacted/etc/quoted.txt", "redacted/etc/assigned.txt"}, res.hits
     assert res.stamp is None
+
+
+S1_LINES = ["token=aaaa1111.bbbb2222.cccc3333", 'secret: "Ab!cdefgh9"', "api_key = 'ab!cdef12'",
+            'wep_key0="p@ss!x"', "password: hunter2xyz", "passwd: s3cretpw", "Authorization: Basic dXNlcjpwYXNz=="]
+S1_BENIGN = ["option device 'eth1'", "key_mgmt=WPA-PSK", "keyboard=us", "password_policy:", "bypass=1", "hash_type=sha256"]
+
+
+@pytest.mark.requires_gitleaks
+@pytest.mark.parametrize("line", S1_LINES)
+def test_gitleaks_has_its_own_rules_for_labelled_secrets(root, line):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text(line + "\n")  # NOT passed through the redactor
+    res = _scan(root, [root / "harvest" / "redacted"])
+    assert res.stamp is None and {h.file for h in res.hits} == {"redacted/etc/x.txt"}, res.hits
+
+
+@pytest.mark.requires_gitleaks
+def test_gitleaks_stays_quiet_on_benign_labels(root):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text("\n".join(S1_BENIGN) + "\n")
+    assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
+
+
+def _urlpw():
+    return "https://bob:" + "Zq7pw" + "xyQ9@ddns.example.com/nic"
+
+
+R2_LINES = [
+    _urlpw(),
+    "curl -s -u root:" + "Zq7pw" + "xyQ9 http://192.168.8.1/rpc",
+    "curl --user admin:" + "Zq7pw" + "xyQ9 https://x",
+    "sshpass -p " + "Zq7pw" + "xyQ9 ssh root@h",
+    "mosquitto_pub -h h -u bob -P " + "Zq7pw" + "xyQ9 -t x",
+    "wget --password " + "Zq7pw" + "xyQ9 http://h",
+    "pppd call x user bob password " + "Zq7pw" + "xyQ9",
+    "echo 'root:" + "Zq7pw" + "xyQ9' | chpasswd",
+    "state " + "ab" * 32,
+    "password => '" + "Zq7pw" + "xyQ9'",
+    "password:: " + "Zq7pw" + "xyQ9",
+    "password：" + "Zq7pw" + "xyQ9",
+    "password\t" + "Zq7pw" + "xyQ9",
+    "wpa_passphrase=correct horse battery staple",
+    ": PSK \"" + "Zq7pw" + "xyQ9\"",
+    "00:11:22:33:44:55 " + "Zq7pw" + "xyQ9",
+    "<PreSharedKey>" + "Zq7pw" + "xyQ9</PreSharedKey>",
+    '<input type="password" name="pw" value="' + "Zq7pw" + 'xyQ9">',
+    "AT+CPIN=\"4321\"",
+    '{"pwd": "' + "Zq7pw" + 'xyQ9"}',
+    '{"params":\n [ "' + "ab12" * 8 + '", "x"]}',
+    "<secret>\n" + "ab12" * 8 + "\n</secret>",
+    "-----BEGIN OpenVPN Static key V1-----\n" + "0123456789abcdef" * 2 + "\n-----END OpenVPN Static key V1-----",
+    "data " + "cm9vdDpUcjB1YjRkb3ImM3h5ejEyMzQ1Njc4OTA" + "=",
+]
+R2_BENIGN = ["mkdir -p /tmp/x", "ps -p 123", "ssh -p 2222 host", "see https://example.com:8080/path", "AT+QGPIO=1,26",
+             "sha1 " + "ab" * 20, "<ssid>Home</ssid>", "gpio-keys: gpio: 527", '"auth": {"key": "Integer"}',
+             "ubus call modem get_info"]
+
+
+@pytest.mark.requires_gitleaks
+@pytest.mark.parametrize("line", R2_LINES, ids=[l[:30] for l in R2_LINES])
+def test_gitleaks_has_independent_rules_for_the_review_forms(root, line):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text(line + "\n")  # raw, never redacted
+    res = _scan(root, [root / "harvest" / "redacted"])
+    assert res.stamp is None and {h.file for h in res.hits} == {"redacted/etc/x.txt"}, res.hits
+
+
+@pytest.mark.requires_gitleaks
+def test_gitleaks_stays_quiet_on_review_benign_lines(root):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text("\n".join(R2_BENIGN) + "\n")
+    assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
+
+
+def _r3_lines():
+    from attack3_data import CASES
+    from test_attack3 import B64, H1_BENIGN, H1_LINES, TOK, V
+    cases = {c[0]: c[1] for c in CASES}
+    leaking = ["goodcloud-bind", "mqtt-conf", "b64-blob", "lua-setpass", "cloud-bind-url"]
+    extra = [f"secret_blob={V}", f"psk_hex={V}", f"key_material: {V}", f"password_hash={V}", f"token_value={V}",
+             f"pass_enc={V}", f"blob {B64}", f"data {B64[:20]}/{B64[20:]}", f"x={B64}", "+QCCID: 89860012345678901234F",
+             "ICCID 8901260123456789012F detected", "console=ttyMSM0 androidboot.serialno=0123456789abcdef",
+             "serialno=0123456789abcdef", "usb 1-1: SerialNumber: 0123456789abcdef", "serial number: ABCD1234EFGH",
+             "Serial: ABCD1234EFGH", f"https://goodcloud.xyz/bind?code={V}&mac=xx"]
+    return [cases[k] for k in leaking] + H1_LINES + extra, H1_BENIGN
+
+
+R3_LINES, R3_BENIGN = _r3_lines()
+R3_BENIGN = R3_BENIGN + ["\toption auth 'chap'", "auth_type=pap", "key_mgmt=WPA-PSK", "token_bucket: 10",
+                         "Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled", "serial8250: ttyS0 at MMIO",
+                         "/usr/lib/lua/luci/controller/admin/network_status.lua", "sha256 " + "ab" * 16]
+
+
+@pytest.mark.requires_gitleaks
+@pytest.mark.parametrize("line", R3_LINES, ids=[l.splitlines()[0][:34] for l in R3_LINES])
+def test_gitleaks_has_independent_rules_for_round3_forms(root, line):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text(line + "\n")  # raw, never redacted
+    res = _scan(root, [root / "harvest" / "redacted"])
+    assert res.stamp is None and {h.file for h in res.hits} == {"redacted/etc/x.txt"}, res.hits
+
+
+@pytest.mark.requires_gitleaks
+def test_gitleaks_stays_quiet_on_round3_benign_lines(root):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text("\n".join(R3_BENIGN) + "\n")
+    assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
 
 
 @pytest.mark.requires_gitleaks

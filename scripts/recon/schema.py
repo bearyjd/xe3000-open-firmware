@@ -82,6 +82,8 @@ def raw_finding(accepted: dict) -> dict:
 
 
 def _evidence_problem(ev: dict, chunk: Chunk) -> str | None:
+    if type(ev["line"]) is not int:  # JSON Schema "integer" also admits 1.0; bool is not a line number
+        return f"evidence line must be an integer, got {type(ev['line']).__name__}"
     if len(_WS.sub("", ev["excerpt"])) < MIN_EXCERPT_CHARS:
         return f"excerpt too short: at least {MIN_EXCERPT_CHARS} non-space characters are required"
     if ev["file"] not in chunk.files:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 from collections.abc import Callable
@@ -10,10 +11,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from recon import chunking, cost, groundtruth, preflight, prompts, schema
+from recon import allowlist, canary, chunking, cost, groundtruth, paths, preflight, prompts, schema
 from recon.cache import Cache, cache_key
 from recon.chunking import Chunk
 from recon.client import ModelResponse
+from recon.redact import _is_excluded as is_excluded
 from recon.redact import redact_text
 from recon.scrub import scrub
 
@@ -56,6 +58,9 @@ class RunConfig:
     batch_poll_seconds: float = 20.0
     batch_timeout_seconds: float = DEFAULT_BATCH_TIMEOUT_SECONDS
     resume_batch_id: str | None = None  # poll this existing batch instead of creating one
+    allow_extra: tuple[str, ...] = ()  # explicit, logged opt-in globs on top of the allowlist file
+    no_canary: bool = False  # fixture runs only
+    canary_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -68,14 +73,33 @@ class RunResult:
     run_dir: Path | None
 
 
+def _no_checkpoint() -> None:
+    return None
+
+
 @dataclass
 class _Ledger:
-    """Running worst-case commitment (starts at the pre-send estimate) and the actual call log."""
-    committed_usd: float
-    calls: list
+    """Worst-case dollars and input tokens committed so far (starts at the pre-send estimate) plus the call log.
 
-    def can_afford(self, usd: float, cap: float) -> bool:
-        return self.committed_usd + usd <= cap
+    Every increase is checkpointed to disk BEFORE the paid request it covers, so a kill cannot make a resumed run
+    forget a request whose outcome is unknown."""
+    committed_usd: float
+    committed_tokens: int
+    calls: list
+    max_usd: float = float("inf")
+    max_tokens: int = 1 << 62
+    checkpoint: Callable[[], None] = _no_checkpoint
+
+    def reserve(self, usd: float, tokens: int) -> str | None:
+        """None if reserved and durably recorded; otherwise the reason it does not fit."""
+        if self.committed_usd + usd > self.max_usd:
+            return "cost cap would be exceeded"
+        if self.committed_tokens + tokens > self.max_tokens:
+            return "input token cap would be exceeded"
+        self.committed_usd += usd
+        self.committed_tokens += tokens
+        self.checkpoint()  # raises if the commitment cannot be made durable: the caller must not send
+        return None
 
 
 def _usage_row(chunk_id: str, attempt: int, model: str, resp: ModelResponse, batch: bool) -> dict:
@@ -120,7 +144,7 @@ def _row(chunk_id: str, attempt: int, reason: str, finding: dict | None = None) 
     return {"reason": reason, "finding": finding, "chunk_id": chunk_id, "attempt": attempt}
 
 
-def _analyze_chunk(chunk: Chunk, truth, cfg: RunConfig, client, ledger: _Ledger, tokens: int,
+def _analyze_chunk(chunk: Chunk, truth, cfg: RunConfig, client, ledger: _Ledger,
                    first: ModelResponse | None, from_batch: bool) -> dict:
     """Validate/retry one chunk. `clean` is True only if the final attempt was fully accepted."""
     system = prompts.system_blocks(chunk.artifact_type)
@@ -132,16 +156,17 @@ def _analyze_chunk(chunk: Chunk, truth, cfg: RunConfig, client, ledger: _Ledger,
         if attempt == 0 and first is not None:
             resp, batch = first, from_batch
         else:
-            # A sync call is pre-paid only for attempt 0 of a non-batch run; everything else is committed here.
-            if attempt > 0 or from_batch:
-                worst = cost.worst_case_usd(cfg.model, tokens + len(feedback or ""), cfg.max_tokens)
-                if not ledger.can_afford(worst, cfg.max_usd):
-                    reason = ("batch result unavailable (errored/expired/missing); sync fallback skipped: cost cap "
-                              "would be exceeded" if attempt == 0 else "retry skipped: cost cap would be exceeded")
-                    rejected.append(_row(chunk.chunk_id, attempt, reason))
-                    break
-                ledger.committed_usd += worst
             messages = [{"role": "user", "content": prompts.user_message(chunk.render(), feedback)}]
+            # Attempt 0 of a non-batch run is pre-paid by the estimate. Every other request is counted on its exact
+            # messages, held against both caps and made durable before it is sent.
+            if attempt > 0 or from_batch:
+                n = client.count_tokens(cfg.model, system, messages)
+                why = ledger.reserve(cost.worst_case_usd(cfg.model, n, cfg.max_tokens), n)
+                if why:
+                    base = ("batch result unavailable (errored/expired/missing); sync fallback skipped"
+                            if attempt == 0 else "retry skipped")
+                    rejected.append(_row(chunk.chunk_id, attempt, f"{base}: {why}"))
+                    break
             resp, batch = client.create(cfg.model, system, messages, cfg.max_tokens), False
         ledger.calls.append(_usage_row(chunk.chunk_id, attempt, cfg.model, resp, batch))
         payload, problem = _parse(resp)
@@ -208,10 +233,10 @@ def _synthesize(findings: list[dict], cfg: RunConfig, client, ledger: _Ledger, o
     system = (prompts.SYNTHESIS_SYSTEM,)
     tokens = client.count_tokens(cfg.synth_model, system, messages)
     worst = cost.worst_case_usd(cfg.synth_model, tokens, cfg.max_tokens)
-    if not ledger.can_afford(worst, cfg.max_usd) or tokens > cfg.max_input_tokens:
-        out(f"synthesis skipped: worst-case ${worst:.4f} would exceed the remaining cap")
+    why = ledger.reserve(worst, tokens)
+    if why:
+        out(f"synthesis skipped: worst-case ${worst:.4f}, {why}")
         return None
-    ledger.committed_usd += worst
     resp = client.create_text(cfg.synth_model, system, messages, cfg.max_tokens)
     ledger.calls.append(_usage_row("synthesis", 0, cfg.synth_model, resp, False))
     return resp.text
@@ -228,22 +253,38 @@ def _manifest(cfg: RunConfig, status: str, est: cost.Estimate, meta: dict, ledge
     actual = round(sum(c["usd"] for c in ledger.calls), 6)
     return {
         "run_id": cfg.run_id, "status": status, "created_utc": datetime.now(timezone.utc).isoformat(),
-        "model": cfg.model, "synth_model": cfg.synth_model if synthesis else None,
+        "model": cfg.model, "max_tokens": cfg.max_tokens, "synth_model": cfg.synth_model if synthesis else None,
         "prompt_version": prompts.PROMPT_VERSION, "schema_version": schema.SCHEMA_VERSION,
         "batch": cfg.batch, "batch_id": meta.get("batch_id"),
         "inputs": {"tree_sha256": meta["digest"], "files": meta["files"]}, "skipped": meta["skipped"],
+        "denied": meta["denied"], "allow_extra": list(cfg.allow_extra),
         "chunks": counts["chunks"], "chunks_cached": counts["cached"],
         "accepted": counts["accepted"], "rejected": counts["rejected"],
         "estimate": {"input_tokens": est.input_tokens, "max_output_tokens": est.max_output_tokens,
                      "worst_case_usd": round(est.usd, 6)},
-        "committed_usd": round(ledger.committed_usd, 6),
-        "actual": {**totals, "usd": actual}, "error": scrub(error) if error else None,
+        "committed_usd": ledger.committed_usd, "committed_input_tokens": ledger.committed_tokens,
+        "actual": {**totals, "usd": actual, "covers": "this invocation only"}, "error": scrub(error) if error else None,
     }
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, fsync it, replace, then fsync the directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
 def _write_manifest(run_dir: Path, manifest: dict) -> None:
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    _atomic_write(run_dir / "manifest.json", json.dumps(manifest, indent=2))
 
 
 def _write_outputs(run_dir: Path, manifest: dict, findings: list[dict], rejected: list[dict], ledger: _Ledger,
@@ -266,45 +307,104 @@ def _prior_manifest(run_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _prepare_run_dir(run_dir: Path, cfg: RunConfig) -> float:
-    """Create the run dir, or validate it for --resume-batch. Returns cost already committed (resume only)."""
+def _check_resumable(prior: dict, cfg: RunConfig, digest: str) -> None:
+    if not prior.get("batch_id"):
+        raise RunRefused(f"nothing to resume: findings/raw/{cfg.run_id} has no recorded batch id")
+    if prior["batch_id"] != cfg.resume_batch_id:
+        raise RunRefused(f"batch id {cfg.resume_batch_id} does not match the one recorded for this run")
+    if prior.get("status") != "batch-pending":
+        raise RunRefused(f"cannot resume: prior status is {prior.get('status')!r}, expected 'batch-pending'")
+    if (prior.get("inputs") or {}).get("tree_sha256") != digest:
+        raise RunRefused("cannot resume: the input tree changed since the batch was created")
+    if prior.get("model") != cfg.model:
+        raise RunRefused(f"cannot resume: model differs (batch was created with {prior.get('model')!r})")
+    if prior.get("max_tokens") != cfg.max_tokens:
+        raise RunRefused(f"cannot resume: max_tokens differs (batch used {prior.get('max_tokens')!r})")
+
+
+def _prepare_run_dir(run_dir: Path, cfg: RunConfig, digest: str) -> tuple[float, int]:
+    """Create the run dir, or validate it for --resume-batch. Returns (usd, input tokens) already committed."""
     prior = _prior_manifest(run_dir) if run_dir.exists() else {}
     if cfg.resume_batch_id is None:
         if run_dir.exists():
             hint = f" (batch {prior['batch_id']} recorded; use --resume-batch {prior['batch_id']})" if prior.get("batch_id") else ""
             raise RunRefused(f"run directory already exists: findings/raw/{cfg.run_id}{hint}")
         run_dir.mkdir(parents=True)
-        return 0.0
-    if not prior.get("batch_id"):
-        raise RunRefused(f"nothing to resume: findings/raw/{cfg.run_id} has no recorded batch id")
-    if prior["batch_id"] != cfg.resume_batch_id:
-        raise RunRefused(f"batch id {cfg.resume_batch_id} does not match the one recorded for this run")
-    return float(prior.get("committed_usd") or 0.0)
+        return 0.0, 0
+    _check_resumable(prior, cfg, digest)
+    return float(prior.get("committed_usd") or 0.0), int(prior.get("committed_input_tokens") or 0)
 
 
-def _load_inputs(cfg: RunConfig):
-    """Read every file ONCE. Returns (digest, hashed files, skipped, sendable texts)."""
+def _canary_gate(cfg: RunConfig, raw: dict[str, str]) -> None:
+    try:
+        hits = canary.check(raw, skip=cfg.no_canary, path=cfg.canary_file)
+    except canary.CanaryError as exc:
+        raise RunRefused(str(exc)) from None
+    if hits:
+        raise RunRefused(f"a known-secret canary was found at (file:line; value never printed): "
+                         f"{canary.format_hits(hits)}; nothing was sent")
+
+
+def _patterns(cfg: RunConfig, out) -> tuple[str, ...]:
+    try:
+        base = allowlist.load_patterns(cfg.root / allowlist.ALLOWLIST_REL)
+    except allowlist.AllowlistError as exc:
+        raise RunRefused(str(exc)) from None
+    for pattern in cfg.allow_extra:
+        if pattern.startswith("/") or ".." in pattern.split("/"):
+            raise RunRefused(f"--allow-extra pattern escapes the input root: {pattern!r}")
+    if cfg.allow_extra:
+        out(f"allow-extra ENABLED (explicit opt-in, logged in the manifest): {', '.join(cfg.allow_extra)}")
+    return (*base, *cfg.allow_extra)
+
+
+def _classify_inputs(groups, patterns):
+    """Split files into sendable texts (redacted again in memory), skipped (excluded/binary) and denied."""
+    files, skipped, denied, texts = [], [], [], {}
+    for _dir, items in groups:
+        for name, data in items:
+            files.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
+            if is_excluded(Path(name)):  # shadow, serial*, dropbear, *.pem, *.key, *_host_key, secret files
+                skipped.append({"name": name, "reason": "excluded"})
+            elif b"\0" in data or name.lower().endswith(BINARY_SUFFIXES):
+                skipped.append({"name": name, "reason": "binary"})
+            elif not allowlist.is_allowed(name, patterns):
+                denied.append(name)
+            else:
+                texts[name] = redact_text(data.decode("utf-8", errors="replace"), salt=ANALYZE_SALT)[0]
+    return files, skipped, sorted(denied), texts
+
+
+def _load_inputs(cfg: RunConfig, out):
+    """Read every file ONCE. Returns (digest, hashed files, skipped, denied, sendable texts)."""
     groups = preflight.read_groups(cfg.inputs, cfg.root)  # PathRefused on raw/traversal/symlink escape
+    _canary_gate(cfg, {n: d.decode("utf-8", errors="replace") for _g, items in groups for n, d in items})
     digest = preflight.hash_tree(groups)
     if not preflight.stamp_valid(cfg.root, digest):
         raise RunRefused("no valid pre-flight stamp for the current input tree and gitleaks setup; "
                          "run `just preflight` first")
-    files, skipped, texts = [], [], {}
-    for _dir, items in groups:
-        for name, data in items:
-            files.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
-            if b"\0" in data or name.lower().endswith(BINARY_SUFFIXES):
-                skipped.append({"name": name, "reason": "binary"})
-                continue
-            text = data.decode("utf-8", errors="replace")
-            texts[name] = redact_text(text, salt=ANALYZE_SALT)[0] if name.startswith("unpacked/") else text
-    return digest, files, skipped, texts
+    files, skipped, denied, texts = _classify_inputs(groups, _patterns(cfg, out))
+    links = [n for d in cfg.inputs if Path(d).exists() for n in paths.list_symlinks(d, cfg.root)]
+    skipped = [*skipped, *({"name": n, "reason": "symlink"} for n in links)]
+    if not texts:
+        out(f"no allowlisted files to send ({len(denied)} denied); nothing will be sent")
+    return digest, files, skipped, denied, texts
 
 
-def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str], None] = print,
-        sleep: Callable[[float], None] = time.sleep) -> RunResult:
-    _validate_run_id(cfg.run_id)
-    digest, files, skipped, texts = _load_inputs(cfg)
+def _write_failure(run_dir: Path, manifest: dict, ledger: _Ledger) -> None:
+    """Record a failed invocation (best effort). Existing findings/rejected from an earlier invocation are kept."""
+    try:
+        for name in ("findings.jsonl", "rejected.jsonl"):
+            if not (run_dir / name).exists():
+                (run_dir / name).write_text("")
+        (run_dir / "usage.json").write_text(json.dumps({"calls": ledger.calls, "totals": manifest["actual"]}, indent=2))
+        _write_manifest(run_dir, manifest)
+    except OSError:
+        pass  # the checkpointed manifest (if any) already holds the commitments
+
+
+def _plan(cfg: RunConfig, texts: dict, results: dict):
+    """Chunk the inputs and satisfy what the cache can (re-validated). Returns (chunks, keys, truth, pending)."""
     trusted = {n: t for n, t in texts.items() if chunking.classify(n) in chunking.TRUSTED_TYPES}
     truth = groundtruth.extract(trusted)
     chunks = chunking.chunk_files(sorted(texts.items()), cfg.max_chunk_lines)
@@ -312,54 +412,94 @@ def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str
     keys = {c.chunk_id: cache_key(c.render(), prompts.PROMPT_VERSION, cfg.model, schema.SCHEMA_VERSION,
                                   schema_hash=schema.schema_hash(), prompt_hash=prompts.prompt_hash(c.artifact_type),
                                   max_tokens=cfg.max_tokens) for c in chunks}
-    results: dict[str, dict] = {}
     for c in chunks:
         entry = cache.get(keys[c.chunk_id])
         hit = _from_cache(entry, c, truth) if entry is not None else None
         if hit is not None:
             results[c.chunk_id] = {"accepted": hit, "rejected": [], "clean": True}
-    pending = [c for c in chunks if c.chunk_id not in results]
-    cached = len(chunks) - len(pending)
-    client = client_factory()
+    return chunks, keys, truth, [c for c in chunks if c.chunk_id not in results]
+
+
+def _execute(cfg, client, pending, truth, keys, ledger, meta, results, on_created, sleep) -> None:
+    cache = Cache(cfg.root / RESPONSES_DIR)
+    firsts = _submit_batch(pending, cfg, client, meta, on_created, sleep) if cfg.batch and pending else {}
+    for chunk in pending:  # each chunk is cached the moment it completes cleanly
+        res = _analyze_chunk(chunk, truth, cfg, client, ledger, firsts.get(chunk.chunk_id), cfg.batch)
+        results[chunk.chunk_id] = res
+        if res["clean"]:
+            cache.put(keys[chunk.chunk_id], meta["sanitizer"].obj({"findings": res["accepted"]}))
+
+
+def _estimate(cfg, client, pending, out, cached):
     counts = {c.chunk_id: client.count_tokens(cfg.model, prompts.system_blocks(c.artifact_type),
                                               [{"role": "user", "content": prompts.user_message(c.render())}])
               for c in pending}
     est = cost.estimate(cfg.model, list(counts.values()), max_tokens=cfg.max_tokens, batch=cfg.batch)
     out(_format_estimate(est, cached, cfg))
     cost.check_caps(est, max_usd=cfg.max_usd, max_input_tokens=cfg.max_input_tokens)  # before any send
-    if cfg.dry_run:
-        out("dry run: nothing sent")
-        return RunResult("dry-run", est, 0, 0, 0.0, None)
-    run_dir = cfg.root / "findings" / "raw" / cfg.run_id
-    committed = _prepare_run_dir(run_dir, cfg)
-    ledger = _Ledger(max(est.usd, committed), [])
-    meta = {"digest": digest, "files": files, "skipped": skipped, "batch_id": cfg.resume_batch_id}
-    tally = {"chunks": len(chunks), "cached": cached, "accepted": 0, "rejected": 0}
-    try:
-        def on_created(batch_id: str) -> None:
-            meta["batch_id"] = batch_id
-            _write_manifest(run_dir, _manifest(cfg, "batch-pending", est, meta, ledger, tally, False))
-        firsts = _submit_batch(pending, cfg, client, meta, on_created, sleep) if cfg.batch and pending else {}
-        for chunk in pending:  # each chunk is cached the moment it completes cleanly
-            res = _analyze_chunk(chunk, truth, cfg, client, ledger, counts[chunk.chunk_id],
-                                 firsts.get(chunk.chunk_id), cfg.batch)
-            results[chunk.chunk_id] = res
-            if res["clean"]:
-                cache.put(keys[chunk.chunk_id], {"findings": res["accepted"]})
-    except Exception as exc:  # noqa: BLE001 - recorded scrubbed, original chain dropped
-        message = scrub(f"{type(exc).__name__}: {exc}")
-        _write_outputs(run_dir, _manifest(cfg, "error", est, meta, ledger, tally, False, message), [], [], ledger, None)
-        raise RunFailed(message) from None
-    findings = [f for c in chunks for f in results[c.chunk_id]["accepted"]]
-    rejected = [r for c in chunks for r in results[c.chunk_id]["rejected"]]
+    return counts, est
+
+
+def _finish(cfg, client, chunks, results, run_dir, est, meta, ledger, tally, out) -> RunResult:
+    san = meta["sanitizer"]
+    findings = san.obj([f for c in chunks for f in results[c.chunk_id]["accepted"]])
+    rejected = san.obj([r for c in chunks for r in results[c.chunk_id]["rejected"]])
     synthesis = None
     if cfg.synthesize and findings:
         try:
             synthesis = _synthesize(findings, cfg, client, ledger, out)
         except Exception as exc:  # noqa: BLE001 - findings are already paid for; never discard them
-            out(scrub(f"synthesis failed: {type(exc).__name__}: {exc}"))
+            out(san.text(scrub(f"synthesis failed: {type(exc).__name__}: {exc}")))
     tally = {**tally, "accepted": len(findings), "rejected": len(rejected)}
     manifest = _manifest(cfg, "ok", est, meta, ledger, tally, synthesis is not None)
-    actual = _write_outputs(run_dir, manifest, findings, rejected, ledger, synthesis)
+    actual = _write_outputs(run_dir, manifest, findings, rejected, ledger, san.text(synthesis) if synthesis else synthesis)
     out(f"done: {len(findings)} accepted, {len(rejected)} rejected, actual ${actual:.4f} -> findings/raw/{cfg.run_id}")
     return RunResult("ok", est, len(findings), len(rejected), actual, run_dir)
+
+
+def _sanitizer(cfg: RunConfig) -> canary.Sanitizer:
+    if cfg.no_canary:
+        return canary.Sanitizer(())
+    try:
+        return canary.Sanitizer.from_file(cfg.canary_file)
+    except canary.CanaryError as exc:
+        raise RunRefused(str(exc)) from None
+
+
+def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str], None] = print,
+        sleep: Callable[[float], None] = time.sleep) -> RunResult:
+    _validate_run_id(cfg.run_id)
+    digest, files, skipped, denied, texts = _load_inputs(cfg, out)
+    sanitizer = _sanitizer(cfg)
+    results: dict[str, dict] = {}
+    chunks, keys, truth, pending = _plan(cfg, texts, results)
+    cached = len(chunks) - len(pending)
+    client = client_factory()
+    _counts, est = _estimate(cfg, client, pending, out, cached)
+    if cfg.dry_run:
+        out("dry run: nothing sent")
+        return RunResult("dry-run", est, 0, 0, 0.0, None)
+    run_dir = cfg.root / "findings" / "raw" / cfg.run_id
+    prior_usd, prior_tokens = _prepare_run_dir(run_dir, cfg, digest)
+    ledger = _Ledger(max(est.usd, prior_usd), max(est.input_tokens, prior_tokens), [],
+                     max_usd=cfg.max_usd, max_tokens=cfg.max_input_tokens)
+    meta = {"digest": digest, "files": files, "skipped": skipped, "denied": denied,
+            "batch_id": cfg.resume_batch_id, "sanitizer": sanitizer}
+    tally = {"chunks": len(chunks), "cached": cached, "accepted": 0, "rejected": 0}
+
+    def checkpoint() -> None:
+        status = "batch-pending" if meta["batch_id"] else "running"
+        _write_manifest(run_dir, _manifest(cfg, status, est, meta, ledger, tally, False))
+    ledger.checkpoint = checkpoint
+
+    def on_created(batch_id: str) -> None:
+        meta["batch_id"] = batch_id
+        checkpoint()
+    try:
+        _execute(cfg, client, pending, truth, keys, ledger, meta, results, on_created, sleep)
+    except Exception as exc:  # noqa: BLE001 - recorded scrubbed, original chain dropped
+        message = sanitizer.text(scrub(f"{type(exc).__name__}: {exc}"))
+        status = "batch-pending" if meta["batch_id"] else "error"  # a created batch stays resumable
+        _write_failure(run_dir, _manifest(cfg, status, est, meta, ledger, tally, False, message), ledger)
+        raise RunFailed(message) from None
+    return _finish(cfg, client, chunks, results, run_dir, est, meta, ledger, tally, out)

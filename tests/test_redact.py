@@ -31,8 +31,8 @@ def test_every_planted_secret_removed(tmp_path):
         for v in s.values:
             assert v not in out, s.name
     assert "<REDACTED:" in out
-    rules = {r["rule"] for r in report}
-    assert {s.redact_rule for s in SAMPLES} <= rules
+    # the generic labelled-secret rule may pre-empt a specific one, so check per file rather than per rule name
+    assert {s.path for s in SAMPLES} <= {r["file"] for r in report}
 
 
 @pytest.mark.parametrize("sample", SAMPLES, ids=lambda s: s.name)
@@ -64,7 +64,7 @@ def test_mac_pseudonymized_stable_and_oui_kept():
 
 
 def test_disabled_rule_leaves_value():
-    text, _ = redact.redact_text("wpa_passphrase=correct-horse-battery-staple\n", disabled=frozenset({"wifi-psk"}))
+    text, _ = redact.redact_text("wpa_passphrase=correct-horse-battery-staple\n", disabled=frozenset({"wifi-psk", "labelled-secret"}))
     assert "correct-horse-battery-staple" in text
 
 
@@ -188,3 +188,148 @@ def test_bare_imsi_and_dash_mac_and_eui64():
 def test_short_labelled_tokens_are_redacted():
     _gone("session_token: ab12CD", "ab12CD")
     _gone("cookie=Zk9x7", "Zk9x7")
+
+
+# ---- review round 2: names, blocks, structured forms ----
+
+@pytest.mark.parametrize("name", ["etc/ppp/chap-secrets", "etc/ppp/pap-secrets", "etc/ipsec.secrets", "x/guest.psk",
+                                  "etc/hostapd.wpa_psk", "etc/hostapd/wpa_psk_file", "etc/openvpn/client.auth",
+                                  "etc/openvpn/auth-user-pass", "etc/openvpn/userpass.txt", "etc/x.secrets",
+                                  "etc/htpasswd", "Etc/PPP/CHAP-SECRETS"])
+def test_unlabelled_secret_files_are_excluded_by_name(name):
+    from pathlib import Path
+    assert redact._is_excluded(Path(name))
+
+
+def test_excluded_secret_files_are_dropped_from_the_tree(tmp_path):
+    src, dst = tmp_path / "s", tmp_path / "d"
+    (src / "etc" / "ppp").mkdir(parents=True)
+    (src / "etc" / "ppp" / "chap-secrets").write_text("bob * hunter\n")
+    (src / "etc" / "ok.conf").write_text("a=1\n")
+    report = redact.redact_tree(src, dst, salt="x")
+    assert [p.name for p in dst.rglob("*") if p.is_file()] == ["ok.conf"]
+    assert {"file": "etc/ppp/chap-secrets", "rule": "excluded", "count": 1} in report
+
+
+def test_redact_cli_leaves_a_real_harvest_marker(tmp_path):
+    src = tmp_path / "s"
+    src.mkdir()
+    (src / "a.txt").write_text("x=1\n")
+    assert redact.main(["--src", str(src), "--dst", str(tmp_path / "d"), "--salt", "x"]) == 0
+    assert (tmp_path / "d" / ".recon-redacted").is_file()
+
+
+def test_inline_blocks_are_redacted_to_their_closing_tag():
+    body = "AAAA" + "BBBB" * 8
+    for tag in ("secret", "tls-auth", "tls-crypt", "auth-user-pass", "key"):
+        text = f"remote x\n<{tag}>\n{body}\nsecond-{body}\n</{tag}>\nverb 3\n"
+        out = redact.redact_text(text, salt="x")[0]
+        assert body not in out and f"<{tag}>" in out and f"</{tag}>" in out and "verb 3" in out
+    out = redact.redact_text(f"<secret>\n{body}\n", salt="x")[0]  # unterminated: to end of text
+    assert body not in out
+
+
+def test_openvpn_static_key_block():
+    body = "0123456789abcdef" * 2
+    text = f"-----BEGIN OpenVPN Static key V1-----\n{body}\n-----END OpenVPN Static key V1-----\n"
+    assert body not in redact.redact_text(text, salt="x")[0]
+
+
+def test_64_hex_runs_are_redacted_but_other_lengths_are_not():
+    h64 = "ab" * 32
+    assert h64 not in redact.redact_text(f"x {h64} y\n", salt="x")[0]
+    assert redact.redact_text("sha1 " + "ab" * 20 + "\n", salt="x")[0] == "sha1 " + "ab" * 20 + "\n"
+    assert redact.redact_text("id " + "ab" * 33 + "\n", salt="x")[0] == "id " + "ab" * 33 + "\n"
+
+
+def test_url_userinfo_keeps_user_and_host():
+    out = redact.redact_text("https://bob:" + "pw" + "Zz9&q@ddns.example.com/nic\n", salt="x")[0]
+    assert "pwZz9&q" not in out and out.startswith("https://bob:") and "@ddns.example.com/nic" in out
+    plain = "see https://example.com:8080/path and ssh://git@host/x\n"
+    assert redact.redact_text(plain, salt="x")[0] == plain
+
+
+@pytest.mark.parametrize("text,leak", [
+    ("curl -u root:Zq7" + "pwxy http://h", "Zq7pwxy"),
+    ("curl --user=root:Zq7" + "pwxy http://h", "Zq7pwxy"),
+    ("wget --password Zq7" + "pwxy http://h", "Zq7pwxy"),
+    ("wget --password=Zq7" + "pwxy http://h", "Zq7pwxy"),
+    ("sshpass -p Zq7" + "pwxy ssh h", "Zq7pwxy"),
+    ("mosquitto_sub -u a -P Zq7" + "pwxy -t x", "Zq7pwxy"),
+    ("mysql -u root -pZq7" + "pwxy", "Zq7pwxy"),
+    ("pppd call x user bob password Zq7" + "pwxy", "Zq7pwxy"),
+    ("echo 'root:Zq7" + "pwxy' | chpasswd", "Zq7pwxy"),
+    ("echo root:Zq7" + "pwxy | chpasswd", "Zq7pwxy"),
+    ("(echo Zq7" + "pwxy; echo Zq7" + "pwxy) | passwd root", "Zq7pwxy"),
+])
+def test_cli_forms(text, leak):
+    out = redact.redact_text(text + "\n", salt="x")[0]
+    assert leak not in out
+
+
+def test_cli_forms_keep_innocent_flags():
+    for line in ("mkdir -p /tmp/x", "ps -p 123", "ping -c 3 host", "curl -s http://h/x", "ssh -p 2222 host",
+                 "opkg install -P x"):
+        assert redact.redact_text(line + "\n", salt="x")[0] == line + "\n", line
+
+
+@pytest.mark.parametrize("cmd", ["CPIN", "CLCK", "CPWD", "QICSGP", "CGAUTH"])
+def test_at_secret_commands_keep_name_lose_arguments(cmd):
+    out = redact.redact_text(f"echo 'AT+{cmd}=\"SC\",\"8734\",\"u5er\"' > /dev/ttyUSB2\n", salt="x")[0]
+    assert f"AT+{cmd}=" in out and "8734" not in out and "u5er" not in out and "/dev/ttyUSB2" in out
+    assert redact.redact_text(f"AT+{cmd}?\n", salt="x")[0] == f"AT+{cmd}?\n"
+
+
+def test_xml_and_html_secret_elements():
+    val = "Zq7" + "pwxyQ"
+    for text in (f"<PreSharedKey>{val}</PreSharedKey>", f"<password>{val}</password>", f"<X_Token>{val}</X_Token>",
+                 f'<input type="password" name="pw" value="{val}">', f'<input name="wifi_key" value="{val}"/>',
+                 f"<node psk='{val}' ssid='a'>"):
+        out = redact.redact_text(text + "\n", salt="x")[0]
+        assert val not in out, text
+    benign = '<input type="text" name="ssid" value="Home">\n<ssid>Home</ssid>\n'
+    assert redact.redact_text(benign, salt="x")[0] == benign
+
+
+def test_json_keys_unicode_escapes_and_arrays():
+    val = "Zq7" + "pwxyQ"
+    for text in ('{"\\u0070wd": "%s"}', '{"ubus_rpc_session":"%s"}', '{"keys": ["%s", "%s"]}',
+                 '{"params":\n  [ "%s",\n "x"]}', '{"cred": "%s"}', '{"Credentials": {"a": 1}, "session": "%s"}'):
+        t = text % tuple([val] * text.count("%s"))
+        assert val not in redact.redact_text(t, salt="x")[0], text
+    assert redact.redact_text('{"keys_total": 3, "session": {"a": 1}}', salt="x")[0] == '{"keys_total": 3, "session": {"a": 1}}'
+
+
+def test_chained_labels_reach_a_fixed_point():
+    val = "Zq7" + "pwxyQ"
+    assert val not in redact.redact_text(f"ddns: token: {val}\n", salt="x")[0]
+    assert val not in redact.redact_text(f"a=b c=d password:{val}\n", salt="x")[0]
+
+
+def test_benign_suffix_names_redacted_unless_value_is_benign():
+    val = "Zq7" + "pwxyQ"
+    assert val not in redact.redact_text(f"password_file={val}\n", salt="x")[0]
+    assert val not in redact.redact_text(f"secret_type: {val}\n", salt="x")[0]
+    for ok in ("password_file=/etc/pw", "secret_type: sha256", "key_mgmt=WPA-PSK", "token_bucket: 10"):
+        assert redact.redact_text(ok + "\n", salt="x")[0] == ok + "\n"
+
+
+def test_labelled_whole_rest_of_line_and_quotes():
+    text = "wpa_passphrase=correct horse battery staple\nsae_password=a b c\npassword=\"ab\"&cd rest\n"
+    out = redact.redact_text(text, salt="x")[0]
+    for leak in ("horse", "battery", "staple", "a b c", "&cd"):
+        assert leak not in out, out
+    assert redact.redact_text("password='a b c' next=thing\n", salt="x")[0].endswith(" next=thing\n")
+
+
+def test_already_redacted_skip_requires_the_whole_value():
+    out = redact.redact_text("password=<REDACTED:x> and more words here\n", salt="x")[0]
+    assert "more words" not in out
+    assert redact.redact_text("password=<REDACTED:wifi-psk>\n", salt="x")[0] == "password=<REDACTED:wifi-psk>\n"
+
+
+def test_wpa_psk_file_lines_and_ipsec_secrets():
+    val = "Zq7" + "pwxyQ"
+    for t in (f"00:11:22:33:44:55 {val}", f"keyid=guest 00:00:00:00:00:00 {val}", f': PSK "{val}"',
+              f'10.0.0.1 10.0.0.2 : PSK "{val}"', f"shared_secret {val}"):
+        assert val not in redact.redact_text(t + "\n", salt="x")[0], t

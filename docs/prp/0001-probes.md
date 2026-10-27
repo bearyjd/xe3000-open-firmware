@@ -37,7 +37,7 @@ Package `scripts/recon/`, entry points `scripts/analyze.py`, `scripts/redact.py`
 | `prompts.py` | Per-artifact-type task prompt plus one shared system prompt. `PROMPT_VERSION` participates in the cache key. |
 | `schema.py` | Finding schema (below) and the code-side validator. |
 | `client.py` | Anthropic SDK wrapper: structured outputs, cached prefix, batches, token counting, error scrubbing. |
-| `cache.py` | `cache/<sha256(chunk + PROMPT_VERSION + model + SCHEMA_VERSION)>.json`. |
+| `cache.py` | `cache/responses/<sha256(chunk + PROMPT_VERSION + model + SCHEMA_VERSION + schema hash + prompt hash + max_tokens)>.json`. Only fully clean chunk results are stored; hits are re-validated and `ungrounded` recomputed. |
 | `cost.py` | Worst-case cost estimator and cap enforcement. |
 | `report.py` | Generates `docs/findings/*.md` from `findings/raw/<run-id>/`. Every row links its evidence. |
 
@@ -75,7 +75,7 @@ The model supplies a verbatim excerpt and line number. The **engine** verifies i
 
 ### 3.4 Cost and token caps
 
-- Before any send: `count_tokens` for every uncached chunk. Worst-case cost = counted input tokens at the base input price (cache discounts ignored) + `max_tokens` at the output price, per model, with the 50% factor only for batch runs.
+- Before any send: `count_tokens` for every uncached chunk. Worst-case cost = counted input tokens at the base input price **including the 1.25x cache-write premium on all counted input** (cache read discounts ignored) + `max_tokens` at the output price, per model, with the 50% factor only for batch runs.
 - Cap from `--max-usd` (env `RECON_MAX_USD`; fixture default $0.25) and `--max-input-tokens`. The estimate is printed first. If the worst case exceeds the cap, **nothing is sent**.
 - Cached chunks cost nothing and are excluded from the estimate. Haiku's 100K-token prompt price tier is priced at the higher rate when a chunk exceeds it.
 - Pricing table lives in `cost.py` with its source URL and date; a test fails if a configured model has no price entry.
@@ -111,6 +111,22 @@ Applied to every collected text file; binary artefacts are not sent to the model
 Replacement is `<REDACTED:rule>`. The report lists file, rule and count only. Hard exclusions happen **at collection**, before redaction: `/etc/shadow`, `/etc/dropbear/*`, any `*_host_key`, `*.pem`/`*.key` files, USB `serial` attributes.
 
 The pre-flight is deliberately **independent**: `gitleaks.toml` has its own rules for the same classes (UCI secret options, WireGuard keys, Luhn IMEI-like digit runs, ICCID, PSK lines). A test disables one `redact.py` rule, runs the redactor, and asserts the pre-flight aborts on exactly that planted secret.
+
+### Layers (defence in depth)
+
+Regex redaction is a blacklist and **cannot be complete** (an adversarial review of the first implementation leaked 48 of 100 hostile inputs). It is therefore only one of five layers, and none of them is trusted alone:
+
+1. **Name exclusion**, at redaction and again at load time: `shadow`, `serial*`, `dropbear/*`, `*_host_key`, `*.pem`/`*.key`, `chap-secrets`, `pap-secrets`, `ipsec.secrets`, `*.psk`, `*.secrets`, `*.auth`, `*wpa_psk*`, `auth-user-pass`, `htpasswd`. These files carry unlabelled secrets that no text rule can see.
+2. **Redaction** (`redact.py`, table above plus: URL userinfo, command-line forms such as `curl -u`/`sshpass -p`/`chpasswd`, JSON/XML/HTML/YAML forms, inline key blocks, 64-hex PSKs, base64 blobs, AT PIN/credential arguments). Rules repeat to a fixed point. The engine re-runs the redactor in memory over **every** text file it sends, not only `unpacked/`.
+3. **Independent gitleaks pre-flight** with its own regexes and entropy rules (stamp bound to tree, config and image digest).
+4. **Default-deny API allowlist**: `analyze.py` sends only files matching `containers/recon-allowlist.txt` (init/hotplug scripts, hardware configs by name, dmesg, DTS, module lists, ubus method lists). Everything else is listed under `denied` in the manifest and never sent. `--allow-extra GLOB` is an explicit opt-in, printed and recorded in the manifest. Files such as `ps`, `logread`, crontabs and `etc/config/{wireless,network,rpcd,vpn*,wireguard*,ddns}` are deliberately not on it.
+5. **Known-secret canaries**: an optional 0600 file (`$RECON_CANARY_FILE` or `~/.config/xe3000-open-firmware/canaries`, created by `just canary-init`) holds the owner's real secrets. If any appears in ANY input file, including denied ones, as plain text, case-folded, URL-encoded, base64 or hex, the pre-flight and `analyze.py` abort and print only file and line. When a real harvest is detected (marker written by `redact.py`) and no canary file exists, they refuse unless `--no-canary` is given (fixture runs use that flag). The file is never copied into the repo; the analyze container gets it as a read-only mount only.
+
+Further hardening after the third review: file symlinks are never followed (listed as `skipped` with reason `symlink`) and hardlinks are refused, so an allowlist or exclusion decision on a name can never approve another file's bytes; init-script idioms without a separator (`password VALUE`, `json_add_string password "..."`, `uci_set ... token "..."`, `uci:set(...)`) are redacted; high-entropy words given to `echo`/`printf` or placed in heredocs are redacted; unpadded base64, trailing-`F` ICCIDs and device serial labels are covered in both the redactor and the independent gitleaks rules.
+
+After the fourth (cross-model) review: credential-named fields (`password`, `token`, `secret`, `psk`...) have **no** benign-value exemption in the redactor or in gitleaks (only metadata names such as `password_file` and `key_mgmt`, or ambiguous names such as `auth`, keep one); a `<REDACTED:...>` marker followed by text in the input is not trusted; the pre-flight stamp is written only for a scan that really used the pinned container image and the repository's gitleaks config; the pre-commit hook scans complete staged blobs and fails closed; known secrets from the canary file are removed from everything the engine persists (cache, findings, synthesis, reports, error text); and every paid retry, fallback and synthesis request is counted on its exact messages, held against both the dollar and input-token caps, and fsynced into the manifest before it is sent, so a killed run cannot forget it on resume.
+
+Residual risk, stated plainly: canary values shorter than 6 characters (4-digit SIM PINs) cannot be canaried because they would match everywhere; and an unlabelled secret that is not in the canary file, not in an excluded file name and not recognised by any pattern, inside a file that is on the allowlist, would still be sent. The allowlist keeps that surface small (scripts, DTS, dmesg), and the canaries cover the secrets the owner knows about.
 
 ## 6. Harvest command list (Phase 1, NOT run in Phase 0)
 
@@ -155,7 +171,7 @@ Nothing in this list writes, mounts, loads modules, calls `ubus call` besides `s
 ## 7. Outputs
 
 - `harvest/redacted/`, `redaction-report.json`, preflight stamp
-- `findings/raw/<run-id>/{findings.jsonl,rejected.jsonl,usage.json,manifest.json}` (manifest: model, prompt version, input hashes, estimated and actual tokens/cost)
+- `findings/raw/<run-id>/{findings.jsonl,rejected.jsonl,usage.json,manifest.json}` plus `synthesis.md` with `--synthesize`. A batch run's manifest has status `batch-pending` (and the `batch_id`) from creation until it completes; `--resume-batch` only accepts that status, the same input tree, model and `max_tokens` (manifest: model, prompt version, input hashes, estimated and actual tokens/cost)
 - `docs/findings/*.md` generated by `report.py`
 
 ## 8. Test plan (Phase 0, synthetic fixtures only)
@@ -180,6 +196,7 @@ Fixtures are generated in pytest `tmp_path` at test time so planted fake secrets
 | Reading sysfs/debugfs has side effects | Attribute allowlist; debugfs only if already mounted |
 | LLM hallucinated claims | Evidence verified in code; ground truth from grep wins; `ungrounded` flagged |
 | Cost overrun | Worst-case cap, cache, cheap model for triage, Opus only behind a flag |
+| Unhashed pip installs in the recon image | Versions are pinned but not hash-pinned (`--require-hashes` not used); accepted risk for Phase 0, base image and gitleaks are digest-pinned |
 | API/model behavior drifts | Params verified against docs; pricing table dated; schema versioned in cache key |
 | Closed GL code can't be fully read | Findings label behavior only; nothing proprietary is copied into the repo |
 
@@ -188,7 +205,7 @@ Fixtures are generated in pytest `tmp_path` at test time so planted fake secrets
 Questions the reviewer must answer, with answers recorded here after the review pass:
 
 1. **Is an LLM needed at all?** Grep and `dtc` give the lists; the model only labels purpose and links. If findings are mostly restatements of the ground truth, the engine is overhead. Test: do fixture findings add anything not in the ground-truth lists?
-2. **Is redaction trustworthy?** Regexes miss novel formats (a PSK with no label, a token in a URL query). The gitleaks pre-flight uses different rules but is also pattern based. Residual risk is nonzero; spot-check required before Phase 2.
+2. **Is redaction trustworthy?** No. Regexes miss novel formats, and the first implementation leaked 48 of 100 adversarial inputs, so the design now assumes regex redaction **cannot be complete** and adds name exclusions, a default-deny allowlist and known-secret canaries (the layers under section 5). The gitleaks pre-flight uses different rules but is also pattern based. Residual risk is nonzero (see the layers under section 5); spot-check of what is actually sent (`manifest.json` lists sent, denied and skipped files) is required before Phase 2.
 3. **Does the evidence check just create confidence theater?** A verbatim excerpt proves the text exists, not that the claim follows from it.
 4. **Is the single-session ssh stream fragile?** A dropped connection yields a partial harvest; the engine must mark partial frames, not analyze them as whole.
 5. **Is `/sys/firmware/fdt` the live tree?** It is the DT the kernel booted with, which is what we want, but GL's U-Boot may patch it at boot, so it can differ from the DTB in the image. Both are collected on purpose.

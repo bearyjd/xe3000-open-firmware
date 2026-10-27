@@ -55,21 +55,39 @@ def check_path(path: Path, root: Path) -> Path:
     raise PathRefused(f"refused: {path} is outside harvest/redacted and unpacked")
 
 
-def list_input_files(input_dir: Path, root: Path) -> tuple[InputFile, ...]:
-    """Walk input_dir without following links; every entry must resolve inside the allowlist."""
+def _walk(input_dir: Path, root: Path) -> tuple[list[InputFile], list[str]]:
+    """Regular files and skipped links. File symlinks are never followed: an allowlist or exclusion decision on the
+    link name would otherwise approve the bytes of a different file. Hardlinks are refused outright."""
     start = check_path(Path(input_dir), root)
     if not start.is_dir():
         raise PathRefused(f"refused: {input_dir} is not a directory")
     found: list[InputFile] = []
+    links: list[str] = []
     for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
         for entry in [*dirnames, *filenames]:
             candidate = Path(dirpath) / entry
             real = check_path(candidate, root)  # raises for links escaping the allowlist
-            if candidate.is_symlink() and real.is_dir():
-                continue  # directory link inside the allowlist: its real contents are walked in place
-            if real.is_file():
-                found.append(InputFile(_name_for(candidate, start), real))
-    return tuple(sorted(found, key=lambda f: f.name))
+            name = _name_for(candidate, start)
+            if candidate.is_symlink():
+                links.append(name)
+            elif real.is_file():
+                if candidate.lstat().st_nlink > 1:
+                    raise PathRefused(f"refused: {name} is a hardlink (link count > 1); copy it instead")
+                if real != start / candidate.relative_to(start):  # a parent directory is a link
+                    links.append(name)
+                    continue
+                found.append(InputFile(name, real))
+    return found, sorted(links)
+
+
+def list_input_files(input_dir: Path, root: Path) -> tuple[InputFile, ...]:
+    """Regular files under input_dir (links skipped); every entry must resolve inside the allowlist."""
+    return tuple(sorted(_walk(input_dir, root)[0], key=lambda f: f.name))
+
+
+def list_symlinks(input_dir: Path, root: Path) -> tuple[str, ...]:
+    """Display names of the links that list_input_files skipped."""
+    return tuple(_walk(input_dir, root)[1])
 
 
 def _name_for(candidate: Path, start: Path) -> str:

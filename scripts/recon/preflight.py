@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from recon import canary
 from recon.paths import PathRefused, allowed_roots, list_input_files
 
 LEAK_EXIT_CODE = 7  # distinct from gitleaks' own error code 1
@@ -175,9 +176,27 @@ def _scan_one(directory: Path, config: Path, podman, image, gitleaks_bin, runner
     return hits
 
 
+def _settings_problem(root: Path, config: Path, podman, image: str, gitleaks_bin, accept_local_binary: bool) -> str | None:
+    """Why this scan cannot be attested by the default stamp, or None. The stamp names the repository's gitleaks
+    config and pinned image, so it may only be written for a scan that actually used exactly those."""
+    ctx = stamp_context(root)
+    if ctx is None:
+        return "containers/gitleaks.toml or a digest-pinned containers/gitleaks.image is missing"
+    if hashlib.sha256(Path(config).read_bytes()).hexdigest() != ctx["config_sha256"]:
+        return "config differs from containers/gitleaks.toml"
+    if accept_local_binary:  # tests only: a local binary cannot attest the pinned image
+        return None
+    if gitleaks_bin or not podman:
+        return "scan did not run in the pinned container"
+    if image != ctx["image"]:
+        return "image differs from containers/gitleaks.image"
+    return None
+
+
 def run_preflight(dirs: Sequence[Path], root: Path, *, config: Path, podman: Sequence[str] | None,
                   image: str, gitleaks_bin: str | None,
-                  runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> PreflightResult:
+                  runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+                  accept_local_binary: bool = False) -> PreflightResult:
     digest = tree_hash(dirs, root)  # also enforces the path allowlist before anything is mounted
     hits: tuple[Hit, ...] = ()
     for directory in dirs:
@@ -185,6 +204,9 @@ def run_preflight(dirs: Sequence[Path], root: Path, *, config: Path, podman: Seq
             hits += _scan_one(Path(directory).resolve(), Path(config).resolve(), podman, image, gitleaks_bin, runner)
     if hits:
         return PreflightResult(hits, digest, None)
+    problem = _settings_problem(root, config, podman, image, gitleaks_bin, accept_local_binary)
+    if problem:
+        raise PreflightError(f"scanner settings differ from required defaults ({problem}); no stamp written")
     return PreflightResult((), digest, write_stamp(root, digest))
 
 
@@ -198,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--input", type=Path, action="append", help="input dir (default: harvest/redacted and unpacked)")
     ap.add_argument("--config", type=Path)
     ap.add_argument("--image-file", type=Path)
+    ap.add_argument("--no-canary", action="store_true", help="skip the known-secret canary check (fixture runs)")
     args = ap.parse_args(argv)
     root = args.root.resolve()
     dirs = [d if d.is_absolute() else root / d for d in (args.input or default_inputs(root))]
@@ -205,10 +228,16 @@ def main(argv: list[str] | None = None) -> int:
     gitleaks_bin = os.environ.get(GITLEAKS_BIN_ENV)
     podman = None if gitleaks_bin else shlex.split(os.environ.get(PODMAN_ENV, "podman"))
     try:
+        texts = {n: d.decode("utf-8", errors="replace") for _g, items in read_groups(dirs, root) for n, d in items}
+        hits = canary.check(texts, skip=args.no_canary)
+        if hits:
+            print(f"preflight: ABORT, a known-secret canary was found at (file:line; value never printed): "
+                  f"{canary.format_hits(hits)}")
+            return 1
         image = "" if gitleaks_bin else read_image(args.image_file or root / DEFAULT_IMAGE_REL)
         result = run_preflight(dirs, root, config=config, podman=podman, image=image,
                                gitleaks_bin=gitleaks_bin, runner=_default_runner())
-    except (PathRefused, PreflightError) as exc:
+    except (PathRefused, PreflightError, canary.CanaryError) as exc:
         print(f"preflight: {exc}", file=sys.stderr)
         return 2
     if result.hits:

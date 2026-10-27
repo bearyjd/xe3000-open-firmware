@@ -1,172 +1,49 @@
-"""Rule-based redaction (PRP 0001 §5). Stdlib only: runs on the raw->redacted boundary.
+"""Rule-based redaction (PRP 0001 section 5). Stdlib only: runs on the raw->redacted boundary.
 
-The report lists {file, rule, count}; values never appear in it.
+The report lists {file, rule, count}; values never appear in it. Regex redaction cannot be complete, so it is one of
+several layers: name exclusions here, an independent gitleaks pre-flight, a default-deny API allowlist and known-secret
+canaries (see the PRP).
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import re
 import secrets
 import sys
 from collections import Counter
-from collections.abc import Callable
 from pathlib import Path
 
-PLACEHOLDER = "<REDACTED:{rule}>"
+from recon.redact_ids import BLOB_RULES, IDENTIFIER_RULES, luhn_ok, pseudonymize_macs  # noqa: F401 (luhn_ok re-export)
+from recon.redact_names import SENTINEL
+from recon.redact_secrets import SECRET_RULES
+
 MAC_SALT_ENV = "RECON_MAC_SALT"
 DEFAULT_SALT_FILE = Path("cache") / "mac-salt"
 SKIPPED_BINARY = "skipped-binary"
 EXCLUDED = "excluded"
-LUHN_LEN = 15
-MAC_HASH_HEX_LEN = 6
+MARKER_NAME = ".recon-redacted"
 
-MIN_LABELLED_TOKEN = 4
-SENSITIVE = r"key|psk|pass|passwd|password|passphrase|secret|token|private|auth|sid|hash|cert|username"
-PIN_WORDS = r"pin|pincode|puk"  # whole words only: 'mapping' and 'spinner' must survive
-NOT_ALNUM = r"(?<![A-Za-z0-9])"
-NAME_CH = r"[A-Za-z0-9_.\-]"
-LABEL_SEP = r"""[\s:=\x27"]{0,6}"""
+# Order matters: key blocks, JSON and structured forms first, the generic labelled rule after the specific ones.
+RULES = (*SECRET_RULES, *IDENTIFIER_RULES, *BLOB_RULES)
+RULE_NAMES = tuple(dict.fromkeys(name for name, _ in RULES)) + ("mac",)
 
-_FLAGS = re.IGNORECASE | re.MULTILINE
-PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|\Z)",
-                 re.DOTALL)
-UCI = re.compile(rf"^([ \t]*(?:option|list)[ \t]+(?:\S*(?:{SENSITIVE})\S*|(?:\S*[_.\-])?(?:{PIN_WORDS})(?:[_.\-]\S*)?)[ \t]+)(.+)$",
-                 _FLAGS)
-UCI_SHELL = re.compile(
-    rf"(\buci[ \t]+(?:-\S+[ \t]+)*(?:set|add_list)[ \t]+(?:[^\s=]*(?:{SENSITIVE})[^\s=]*|"
-    rf"(?:[^\s=]*[_.\-])?(?:{PIN_WORDS})(?:[_.\-][^\s=]*)?)=)('[^'\n]*'|\"[^\"\n]*\"|[^\s;&|]+)", re.IGNORECASE)
-WIFI = re.compile(
-    rf"{NOT_ALNUM}((?:{NAME_CH}*(?:psk|sae_password|wpa_passphrase|passw(?:or)?d|passphrase)|"
-    rf"(?:{NAME_CH}*[_.\-])?(?:{PIN_WORDS}))[ \t]*=[ \t]*)(\S.*)$", _FLAGS)
-WG_LINE = re.compile(rf"{NOT_ALNUM}((?:PrivateKey|PresharedKey)[ \t]*=[ \t]*)(\S.*)$", _FLAGS)
-WG_OPT = re.compile(r"^([ \t]*(?:option|list)[ \t]+(?:private_key|preshared_key)[ \t]+)(.+)$", _FLAGS)
-WG_B64 = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
-JSON_KV = re.compile(
-    rf'("(?:[^"\n]*(?:{SENSITIVE})[^"\n]*|(?:[^"\n]*[ _.\-])?(?:{PIN_WORDS})(?:[ _.\-][^"\n]*)?)"[ \t]*:[ \t]*)'
-    r'("(?:[^"\\\n]|\\.)*"|\d+)', re.IGNORECASE)
-JSON_RPC_SID = re.compile(r'("params"[ \t]*:[ \t]*\[[ \t]*")([^"\n]{8,})(")', re.IGNORECASE)
-PW_HASH = re.compile(r"\$(?:1|5|6|y|p)\$[./0-9A-Za-z$,=-]{6,}")
-IMEI_LABEL = re.compile(rf"(\b(?:IMEI|MEID)\b{LABEL_SEP})([0-9A-Fa-f]{{14,18}})", re.IGNORECASE)
-DIGITS15 = re.compile(r"(?<![0-9A-Za-z])\d{15}(?![0-9A-Za-z])")
-IMSI_LABEL = re.compile(rf"(\bIMSI\b{LABEL_SEP})(\d{{6,15}})", re.IGNORECASE)
-IMSI_BARE = re.compile(r"(?<![0-9A-Za-z])[2-7]\d{14}(?![0-9A-Za-z])")  # MCC 2xx-7xx
-ICCID_BARE = re.compile(r"(?<![0-9A-Za-z])89\d{17,18}(?![0-9A-Za-z])")
-ICCID_LABEL = re.compile(rf"(\bICCID\b{LABEL_SEP})(\d{{10,22}})", re.IGNORECASE)
-BEARER = re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
-SK_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}")
-TOKEN_LABEL = re.compile(
-    rf"(\b\w*(?:token|secret|key|sid|cookie)\w*[ \t]*[:=][ \t]*[\x27\"]?)([A-Za-z0-9+/_=-]{{{MIN_LABELLED_TOKEN},}})",
-    re.IGNORECASE,
-)
-MAC_COLON = re.compile(r"\b([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){2}):([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){2})\b")
-MAC_DASH = re.compile(r"\b([0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){2})-([0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){2})\b")
-EUI64 = re.compile(r"(?<![0-9A-Za-z:])((?:[0-9A-Fa-f]{0,4}:){1,8})[0-9A-Fa-f]{1,4}:[0-9A-Fa-f]{2}ff:fe[0-9A-Fa-f]{2}:"
-                   r"[0-9A-Fa-f]{1,4}(?![0-9A-Za-z:])", re.IGNORECASE)
-
-EXCLUDED_NAMES = frozenset({"shadow", "serial"})
-EXCLUDED_SUFFIXES = (".pem", ".key")
-
-
-def _tag(rule: str) -> str:
-    return PLACEHOLDER.format(rule=rule)
-
-
-def luhn_ok(digits: str) -> bool:
-    total = 0
-    for i, ch in enumerate(reversed(digits)):
-        d = int(ch) * (2 if i % 2 else 1)
-        total += d - 9 if d > 9 else d
-    return total % 10 == 0
-
-
-def _sub_value(pattern: re.Pattern, rule: str) -> Callable[[str, Counter], str]:
-    def apply(text: str, counts: Counter) -> str:
-        def repl(m: re.Match) -> str:
-            counts[rule] += 1
-            return m.group(1) + _tag(rule)
-        return pattern.sub(repl, text)
-    return apply
-
-
-def _sub_whole(pattern: re.Pattern, rule: str) -> Callable[[str, Counter], str]:
-    def apply(text: str, counts: Counter) -> str:
-        def repl(_m: re.Match) -> str:
-            counts[rule] += 1
-            return _tag(rule)
-        return pattern.sub(repl, text)
-    return apply
-
-
-def _json_secret(text: str, counts: Counter) -> str:
-    def kv(m: re.Match) -> str:
-        counts["json-secret"] += 1
-        return m.group(1) + '"' + _tag("json-secret") + '"'
-
-    def sid(m: re.Match) -> str:
-        counts["json-secret"] += 1
-        return m.group(1) + _tag("json-secret") + m.group(3)
-    return JSON_RPC_SID.sub(sid, JSON_KV.sub(kv, text))
-
-
-def _luhn_digits(text: str, counts: Counter) -> str:
-    def repl(m: re.Match) -> str:
-        if not luhn_ok(m.group(0)):
-            return m.group(0)
-        counts["imei"] += 1
-        return _tag("imei")
-    return DIGITS15.sub(repl, text)
-
-
-def _chain(*steps: Callable[[str, Counter], str]) -> Callable[[str, Counter], str]:
-    def apply(text: str, counts: Counter) -> str:
-        for step in steps:
-            text = step(text, counts)
-        return text
-    return apply
-
-
-# Order matters: multi-line and structured rules first, generic last. One entry per PRP rule.
-RULES: tuple[tuple[str, Callable[[str, Counter], str]], ...] = (
-    ("pem-block", _sub_whole(PEM, "pem-block")),
-    ("json-secret", _json_secret),
-    ("uci-sensitive", _chain(_sub_value(UCI, "uci-sensitive"), _sub_value(UCI_SHELL, "uci-sensitive"))),
-    ("wifi-psk", _sub_value(WIFI, "wifi-psk")),
-    ("wg-key", _chain(_sub_value(WG_LINE, "wg-key"), _sub_value(WG_OPT, "wg-key"), _sub_whole(WG_B64, "wg-key"))),
-    ("pw-hash", _sub_whole(PW_HASH, "pw-hash")),
-    ("imei", _chain(_sub_value(IMEI_LABEL, "imei"), _luhn_digits)),
-    ("imsi", _chain(_sub_value(IMSI_LABEL, "imsi"), _sub_whole(IMSI_BARE, "imsi"))),
-    ("iccid", _chain(_sub_value(ICCID_LABEL, "iccid"), _sub_whole(ICCID_BARE, "iccid"))),
-    ("token", _chain(_sub_value(BEARER, "token"), _sub_whole(SK_KEY, "token"), _sub_value(TOKEN_LABEL, "token"))),
-    ("eui64", _sub_value(EUI64, "eui64")),
-)
-RULE_NAMES = tuple(name for name, _ in RULES) + ("mac",)
-
-
-def _pseudonymize_mac(text: str, counts: Counter, salt: str) -> str:
-    """Keep the OUI; replace the device part with a stable salted hash, in the same separator style."""
-    def make(sep: str):
-        def repl(m: re.Match) -> str:
-            counts["mac"] += 1
-            oui, rest = m.group(1), m.group(2)
-            digest = hashlib.sha256(f"{salt}:{rest.lower().replace('-', ':')}".encode()).hexdigest()[:MAC_HASH_HEX_LEN]
-            tail = sep.join(digest[i:i + 2] for i in range(0, MAC_HASH_HEX_LEN, 2))
-            return f"{oui.lower()}{sep}{tail}"
-        return repl
-    return MAC_DASH.sub(make("-"), MAC_COLON.sub(make(":"), text))
+EXCLUDED_NAMES = frozenset({"shadow", "htpasswd", "chap-secrets", "pap-secrets", "ipsec.secrets", "auth-user-pass"})
+EXCLUDED_SUFFIXES = (".pem", ".key", ".psk", ".secrets", ".auth", "_host_key")
+EXCLUDED_FRAGMENTS = ("wpa_psk", "userpass", "auth-user-pass", "htpasswd")
 
 
 def redact_text(text: str, disabled: frozenset[str] = frozenset(), salt: str = "") -> tuple[str, Counter]:
-    """Return (redacted text, per-rule counts). `disabled` is for tests of the independent pre-flight."""
+    """Return (redacted text, per-rule counts), one pass. Chained labels are handled inside the labelled rule
+    (it rescans inside non-secret values). `disabled` is for tests of the independent pre-flight."""
     counts: Counter = Counter()
+    text = text.replace(SENTINEL, "")  # the marker is private to this call
     for name, apply in RULES:
         if name not in disabled:
             text = apply(text, counts)
     if "mac" not in disabled:
-        text = _pseudonymize_mac(text, counts, salt)
-    return text, counts
+        text = pseudonymize_macs(text, counts, salt)
+    return text.replace(SENTINEL, ""), counts
 
 
 def _is_excluded(rel: Path) -> bool:
@@ -174,9 +51,10 @@ def _is_excluded(rel: Path) -> bool:
     name = rel.name.lower()
     return (
         name in EXCLUDED_NAMES
+        or name.startswith("serial")
         or "dropbear" in parts
-        or name.endswith("_host_key")
         or name.endswith(EXCLUDED_SUFFIXES)
+        or any(f in name for f in EXCLUDED_FRAGMENTS)
     )
 
 
@@ -243,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         print("redact: --dst and --src must not overlap", file=sys.stderr)
         return 2
     report = redact_tree(src, dst, salt=_load_salt(args.salt, args.root.resolve()))
+    dst.mkdir(parents=True, exist_ok=True)
+    (dst / MARKER_NAME).write_text("redacted from a raw tree by redact.py; values are never listed\n")
     payload = json.dumps(report, indent=2, sort_keys=True)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

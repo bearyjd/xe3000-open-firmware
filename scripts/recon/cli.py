@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from recon import cost, runner
+from recon import canary, cost, runner
 from recon.client import ReconClient, load_env
 from recon.paths import PathRefused, allowed_roots
 from recon.scrub import scrub
@@ -56,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--batch-timeout", type=positive_float, default=runner.DEFAULT_BATCH_TIMEOUT_SECONDS,
                     help="seconds to wait for a batch to end")
     ap.add_argument("--batch-poll", type=positive_float, default=20.0, help="seconds between batch status polls")
+    ap.add_argument("--allow-extra", action="append", default=[], metavar="GLOB",
+                    help="also send files matching GLOB (relative to the input root); explicit and logged")
+    ap.add_argument("--no-canary", action="store_true", help="skip the known-secret canary check (fixture runs only)")
+    ap.add_argument("--canary-file", type=Path, help="canary file (default: $RECON_CANARY_FILE or ~/.config/...)")
     ap.add_argument("--synthesize", action="store_true", help="final gap-report pass on the Opus model")
     ap.add_argument("--cheap", action="store_true", help="use LLM_MODEL_CHEAP (bulk triage)")
     ap.add_argument("--env-file", type=Path, help="dotenv file to load; contents are never printed")
@@ -71,22 +75,35 @@ def _config(args: argparse.Namespace) -> runner.RunConfig:
                             model=cheap if args.cheap else standard, max_usd=args.max_usd,
                             max_input_tokens=args.max_input_tokens, max_tokens=args.max_tokens,
                             dry_run=args.dry_run, batch=args.batch or bool(args.resume_batch),
-                            resume_batch_id=args.resume_batch, batch_timeout_seconds=args.batch_timeout,
+                            resume_batch_id=args.resume_batch, allow_extra=tuple(args.allow_extra),
+                            no_canary=args.no_canary, canary_file=args.canary_file, batch_timeout_seconds=args.batch_timeout,
                             batch_poll_seconds=args.batch_poll, synthesize=args.synthesize)
+
+
+def _lenient_sanitizer(args: argparse.Namespace) -> canary.Sanitizer:
+    """Known-secret sanitiser for messages; an unusable canary file is reported by the run itself."""
+    if args.no_canary:
+        return canary.Sanitizer(())
+    try:
+        return canary.Sanitizer.from_file(args.canary_file)
+    except (canary.CanaryError, OSError):
+        return canary.Sanitizer(())
 
 
 def main(argv: Sequence[str] | None = None, client_factory: Callable[[], object] | None = None,
          out: Callable[[str], None] = print) -> int:
     args = build_parser().parse_args(argv)
+    san = _lenient_sanitizer(args)
+    show = lambda line: san.text(scrub(line))  # noqa: E731 - one-line helper
     try:
         load_env(args.env_file)
         cfg = _config(args)
         factory = client_factory or ReconClient
-        runner.run(cfg, factory, out=lambda line: out(scrub(line)))
+        runner.run(cfg, factory, out=lambda line: out(show(line)))
     except (PathRefused, runner.RunRefused, cost.CapExceeded) as exc:
-        print(scrub(f"analyze: refused: {exc}"), file=sys.stderr)
+        print(show(f"analyze: refused: {exc}"), file=sys.stderr)
         return EXIT_REFUSED
     except Exception as exc:  # noqa: BLE001 - last line of defence: never show a raw SDK message
-        print(scrub(f"analyze: failed: {type(exc).__name__}: {exc}"), file=sys.stderr)
+        print(show(f"analyze: failed: {type(exc).__name__}: {exc}"), file=sys.stderr)
         return EXIT_REFUSED
     return EXIT_OK

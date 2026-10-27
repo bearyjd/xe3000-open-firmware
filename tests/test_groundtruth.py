@@ -1,3 +1,5 @@
+import pytest
+
 from recon import groundtruth as gt
 
 FILES = {
@@ -61,3 +63,18 @@ def test_prose_rpc_method_requires_quoted_or_structured_names():
     assert any("v2x" not in r and "svc.go" in r for r in gt.ungrounded_reasons("ubus method svc.go runs", truth))
     assert any("reboot" in r for r in gt.ungrounded_reasons("RPC method `reboot` runs", truth))
     assert any("ping2" in r for r in gt.ungrounded_reasons("RPC method ping2 runs", truth))
+
+
+@pytest.mark.parametrize("prose", ["Uses the RPC method calls.", "The ubus method handler.", "An RPC method for it,",
+                                   "RPC method handler; then more", "the rpc method calls!"])
+def test_sentence_final_prose_after_rpc_method_is_not_a_name(prose):
+    truth = gt.extract({"f": "ubus call modem get_info\n"})
+    assert gt.ungrounded_reasons(prose, truth) == [], prose
+
+
+def test_trailing_punctuation_stripped_from_structured_names():
+    truth = gt.extract({"f": "ubus call modem get_info\n"})
+    assert gt.ungrounded_reasons("Calls the ubus method modem.get_info.", truth) == []
+    r = gt.ungrounded_reasons("Calls the RPC method `svc.go`.", truth)
+    assert r and "svc.go." not in r[0] and "svc.go" in r[0]
+    assert any("ping2" in x and "ping2." not in x for x in gt.ungrounded_reasons("RPC method ping2.", truth))
