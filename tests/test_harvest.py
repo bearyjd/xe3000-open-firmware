@@ -369,7 +369,12 @@ def shim(tmp_path):
     sshp.chmod(0o755)
     shimdir = tmp_path / "shim"
     shimdir.mkdir()
-    out = tmp_path / "out"
+    # Run a copy of the script inside a throwaway fake repo so HERE/../harvest/raw is the confinement root.
+    repo = tmp_path / "repo"
+    (repo / "scripts" / "remote").mkdir(parents=True)
+    shutil.copy(HARVEST, repo / "scripts" / "harvest.sh")
+    shutil.copy(COLLECT, repo / "scripts" / "remote" / "collect.sh")
+    out = repo / "harvest" / "raw" / "out"
 
     def run(stream=None, host="router.invalid", args=(), rc=0, env_extra=None):
         env = {"PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}", "SHIM_DIR": str(shimdir),
@@ -380,9 +385,9 @@ def shim(tmp_path):
             sf = tmp_path / "canned.txt"
             sf.write_bytes(stream if isinstance(stream, bytes) else stream.encode())
             env["SHIM_STREAM"] = str(sf)
-        return subprocess.run(["bash", str(HARVEST), *args], capture_output=True, text=True, env=env, timeout=120)
+        return subprocess.run(["bash", str(repo / "scripts" / "harvest.sh"), *args], capture_output=True, text=True, env=env, timeout=120)
 
-    run.shimdir, run.out = shimdir, out
+    run.shimdir, run.out, run.repo = shimdir, out, repo
     return run
 
 
@@ -525,7 +530,7 @@ def test_harvest_requires_router_host_and_validates_it(shim):
 
 
 def test_output_base_is_tightened_to_0700(shim):
-    shim.out.mkdir()
+    shim.out.mkdir(parents=True)
     shim.out.chmod(0o755)
     assert shim(GOOD).returncode == 0
     assert stat.S_IMODE(shim.out.stat().st_mode) == 0o700
@@ -626,3 +631,64 @@ def test_no_timeout_skip_prints_a_clear_notice(shim):
     assert r.returncode == 0
     assert "NOTICE" in r.stderr and "timeout" in r.stderr and "hwmon" in r.stderr
     assert "NOTICE\tno-timeout" in (only_run_dir(shim.out) / "manifest.tsv").read_text()
+
+
+# ---------------------------------------------------------------- HARVEST_OUT confinement (raw data must stay in harvest/raw)
+
+def assert_refused(r):
+    assert r.returncode != 0 and "HARVEST_OUT" in r.stderr, (r.returncode, r.stderr)
+
+
+def test_harvest_out_outside_raw_refused(shim, tmp_path):
+    target = tmp_path / "elsewhere"
+    assert_refused(shim(GOOD, env_extra={"HARVEST_OUT": str(target)}))
+    assert not target.exists()
+    assert not (shim.shimdir / "args").exists()
+
+
+def test_harvest_out_traversal_refused(shim):
+    assert_refused(shim(GOOD, env_extra={"HARVEST_OUT": str(shim.out) + "/../../escape"}))
+    assert not (shim.repo / "harvest" / "escape").exists()
+
+
+def test_harvest_out_symlink_escape_refused(shim, tmp_path):
+    outside = tmp_path / "synced"
+    outside.mkdir()
+    raw = shim.repo / "harvest" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "link").symlink_to(outside)
+    assert_refused(shim(GOOD, env_extra={"HARVEST_OUT": str(raw / "link" / "sub")}))
+    assert list(outside.iterdir()) == []
+
+
+def test_harvest_raw_dir_itself_symlink_refused(shim, tmp_path):
+    outside = tmp_path / "synced"
+    outside.mkdir()
+    (shim.repo / "harvest").mkdir()
+    (shim.repo / "harvest" / "raw").symlink_to(outside)
+    assert_refused(shim(GOOD))
+    assert list(outside.iterdir()) == []
+
+
+def test_harvest_out_tracked_dirs_and_prefix_siblings_refused(shim):
+    repo = shim.repo
+    for bad in (repo, repo / "scripts", repo / "harvest", str(repo / "harvest" / "raw") + "-evil", "", "relative/dir"):
+        r = shim(GOOD, env_extra={"HARVEST_OUT": str(bad)})
+        if bad == "":
+            continue  # empty value falls back to the default
+        assert_refused(r)
+    assert not list((repo / "scripts").glob("*.tar"))
+    assert not (repo / "harvest" / "raw-evil").exists()
+
+
+def test_harvest_out_subdir_of_raw_allowed(shim):
+    r = shim(GOOD, env_extra={"HARVEST_OUT": str(shim.out / "nested")})
+    assert r.returncode == 0, r.stderr
+    assert (shim.out / "nested").is_dir()
+
+
+def test_harvest_default_out_is_raw(shim):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    r = subprocess.run(["bash", str(shim.repo / "scripts" / "harvest.sh"), "--dry-print"],
+                       capture_output=True, text=True, env={**env, "ROUTER_HOST": "router.invalid"}, timeout=30)
+    assert r.returncode == 0, r.stderr
