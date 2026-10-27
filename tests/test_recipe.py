@@ -267,6 +267,90 @@ def test_prepare_aborts_when_tag_commit_differs_from_pin(tmp_path, upstream):
     assert "does not match" in (r.stdout + r.stderr)
 
 
+def test_prepare_leaves_no_tree_after_failed_commit_pin(tmp_path, upstream):
+    repo, _ = upstream
+    r = _prepare(tmp_path, repo, "0" * 40)
+    assert r.returncode != 0
+    assert not (tmp_path / "build" / "openwrt").exists()
+    leftovers = [p.name for p in (tmp_path / "build").iterdir()] if (tmp_path / "build").exists() else []
+    assert leftovers == []
+
+
+def test_prepare_leaves_no_tree_after_failed_patch(tmp_path, upstream):
+    repo, _ = upstream
+    dts = repo / DTSI
+    dts.write_text(dts.read_text().replace("root=PARTLABEL=rootfs", "root=PARTLABEL=other"))
+    _git(repo, "commit", "-q", "-am", "diverge")
+    _git(repo, "tag", "-f", "v25.12.99")
+    commit = _git(repo, "rev-parse", "HEAD")
+    r = _prepare(tmp_path, repo, commit)
+    assert r.returncode != 0
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert list((tmp_path / "build").iterdir()) == []
+
+
+def test_prepare_writes_stamp_with_pinned_commit(tmp_path, upstream):
+    repo, commit = upstream
+    assert _prepare(tmp_path, repo, commit).returncode == 0
+    stamp = tmp_path / "build" / "openwrt" / ".xe3000-prepared"
+    assert stamp.read_text().strip() == commit
+
+
+def _build_sandbox(tmp_path, commit_in_pins):
+    root = tmp_path / "sandbox"
+    (root / "recipe").mkdir(parents=True)
+    shutil.copy(RECIPE / "container-build.sh", root / "recipe" / "container-build.sh")
+    (root / "recipe" / "pins.env").write_text(
+        f"OPENWRT_REPO=https://example.invalid/openwrt.git\nOPENWRT_TAG=v25.12.99\nOPENWRT_COMMIT={commit_in_pins}\n")
+    tree = root / "build" / "openwrt"
+    tree.mkdir(parents=True)
+    _git(tree, "init", "-q", "-b", "main")
+    (tree / "f").write_text("x")
+    _git(tree, "add", "-A")
+    _git(tree, "commit", "-q", "-m", "x")
+    return root, tree, _git(tree, "rev-parse", "HEAD")
+
+
+def _run_build(root):
+    env = {**os.environ, "PODMAN": "echo"}
+    return subprocess.run(["bash", str(root / "recipe" / "container-build.sh"), "feeds"], env=env,
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_container_build_rejects_tree_without_stamp(tmp_path):
+    root, _, head = _build_sandbox(tmp_path, "a" * 40)
+    r = _run_build(root)
+    assert r.returncode != 0 and "prepare" in r.stderr
+
+
+def test_container_build_rejects_stamp_not_matching_head_or_pin(tmp_path):
+    root, tree, head = _build_sandbox(tmp_path, "a" * 40)
+    (tree / ".xe3000-prepared").write_text(head + "\n")
+    assert _run_build(root).returncode != 0  # HEAD is not the pinned commit
+    root3, tree3, head3 = _build_sandbox(tmp_path / "three", "c" * 40)
+    (root3 / "recipe" / "pins.env").write_text(
+        f"OPENWRT_REPO=x\nOPENWRT_TAG=t\nOPENWRT_COMMIT={head3}\n")
+    (tree3 / ".xe3000-prepared").write_text("d" * 40 + "\n")
+    assert _run_build(root3).returncode != 0  # stamp differs from HEAD
+
+
+def test_container_build_accepts_verified_tree(tmp_path):
+    root, tree, head = _build_sandbox(tmp_path, "a" * 40)
+    (root / "recipe" / "pins.env").write_text(f"OPENWRT_REPO=x\nOPENWRT_TAG=t\nOPENWRT_COMMIT={head}\n")
+    (tree / ".xe3000-prepared").write_text(head + "\n")
+    r = _run_build(root)
+    assert r.returncode == 0, r.stderr
+
+
+def test_runbook_specifies_sysupgrade_image_not_factory():
+    text = RUNBOOK.read_text().lower()
+    assert "sysupgrade.bin" in text
+    assert "openwrt `factory` image" not in text
+    for banned in ("factory", "preloader", "fip"):
+        assert banned in text  # named only in the explicit exclusion
+    assert "do not upload" in text or "never upload" in text
+
+
 def test_prepare_refuses_existing_destination(tmp_path, upstream):
     repo, commit = upstream
     assert _prepare(tmp_path, repo, commit).returncode == 0
