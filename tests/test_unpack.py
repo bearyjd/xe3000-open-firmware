@@ -283,3 +283,19 @@ def test_missing_unblob_is_a_clean_error(tmp_path, monkeypatch):
     img.write_bytes(b"x")
     with pytest.raises(unpack.UnpackError):
         unpack.run_unblob(img, tmp_path / "work")
+
+
+def test_nested_images_in_a_sysupgrade_tar_go_through_unblob(tmp_path, monkeypatch):
+    tree = tmp_path / "tree"
+    (tree / "sysupgrade-x").mkdir(parents=True)
+    (tree / "sysupgrade-x" / "root").write_bytes(b"\0" * (1 << 20))
+    (tree / "sysupgrade-x" / "CONTROL").write_text("small")
+    seen = []
+    monkeypatch.setattr(unpack.shutil, "which", lambda n: "/x/unblob")
+    monkeypatch.setattr(unpack, "run_unblob", lambda p, w, tree=None, tag="": seen.append((p.name, tree, tag)))
+    assert unpack.unpack_nested(tree, tmp_path / "work") == 1
+    assert seen[0][0] == "root" and seen[0][1] == tree
+    (tree / "etc").mkdir()
+    (tree / "bin").mkdir()
+    (tree / "etc" / "f").write_text("1")
+    assert unpack.unpack_nested(tree, tmp_path / "work") == 0  # a rootfs is already there

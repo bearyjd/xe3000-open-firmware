@@ -19,12 +19,13 @@ if [ -e "$ROOT/build/unpack/$name" ] || [ -e "$ROOT/unpacked/$name" ]; then
   echo "unpack: build/unpack/$name or unpacked/$name already exists; pick a new NAME (nothing is deleted here)" >&2
   exit 2
 fi
+scripts_dir="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$ROOT/build/unpack" "$ROOT/unpacked" "$ROOT/cache/redact-state"
 # The input is mounted as one read-only file (never its directory, so harvest/raw is never exposed as a tree).
 # The staging mount is noexec,nosuid,nodev so bytes extracted from the image can never be run from it.
 # shellcheck disable=SC2086
 $PODMAN run --rm $HARDENING --network=none \
-  -v "$ROOT/scripts:/work/scripts:ro,z" -v "$input_real:/in/image:ro,z" \
+  -v "$scripts_dir:/work/scripts:ro,z" -v "$input_real:/in/image:ro,z" \
   -v "$ROOT/build/unpack:/work/build:z,noexec,nosuid,nodev" -v "$ROOT/unpacked:/work/unpacked:z" \
   -v "$ROOT/cache/redact-state:/work/cache:z" \
   "$UNPACK_IMAGE" python scripts/unpack.py --input /in/image --work "/work/build/$name" --out "/work/unpacked/$name"

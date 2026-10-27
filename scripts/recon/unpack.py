@@ -23,7 +23,7 @@ from recon.redact import EXCLUDED, MARKER_NAME, SKIPPED_BINARY, _load_salt, reda
 from recon.unpack_tar import UnpackError, safe_extract_tar, sanitize_tree
 
 __all__ = ["UnpackError", "Artifacts", "parse_fdt", "safe_extract_tar", "sanitize_tree", "find_artifacts", "stage_output",
-           "run_unblob", "main"]
+           "run_unblob", "unpack_nested", "main"]
 
 UNBLOB_TIMEOUT_S = 3600
 ROOTFS_MARKERS = ("bin", "lib", "usr", "sbin")
@@ -137,16 +137,16 @@ def stage_output(tree: Path, out: Path, salt: str = "") -> dict:
     return layout
 
 
-def run_unblob(image: Path, work: Path) -> Path:
-    """Run unblob on `image`, extracting under work/tree; its log and TMPDIR stay inside `work`. Returns the tree."""
+def run_unblob(image: Path, work: Path, tree: Path | None = None, tag: str = "") -> Path:
+    """Run unblob on `image`, extracting under `tree` (default work/tree); its log and TMPDIR stay inside `work`."""
     exe = shutil.which("unblob")
     if exe is None:
         raise UnpackError("unblob is not installed (run this inside the unpack container)")
-    tree, tmp = work / "tree", work / "tmp"
+    tree, tmp = tree or work / "tree", work / "tmp"
     for d in (tree, tmp):
         d.mkdir(parents=True, exist_ok=True)
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TMPDIR": str(tmp), "HOME": str(tmp), "LANG": "C.UTF-8"}
-    argv = [exe, "-e", str(tree), "--log", str(work / "unblob.log"), str(image)]
+    argv = [exe, "-e", str(tree), "--log", str(work / f"unblob{tag}.log"), str(image)]
     try:
         res = subprocess.run(argv, cwd=tmp, env=env, capture_output=True, text=True, timeout=UNBLOB_TIMEOUT_S, check=False)
     except subprocess.TimeoutExpired as exc:
@@ -154,6 +154,20 @@ def run_unblob(image: Path, work: Path) -> Path:
     if res.returncode != 0:
         raise UnpackError(f"unblob exited with status {res.returncode}")
     return tree
+
+
+NESTED_MIN_BYTES = 1 << 20
+
+
+def unpack_nested(tree: Path, work: Path) -> int:
+    """A sysupgrade tar wraps the real kernel/rootfs images: when the tar yields no rootfs, run unblob over each large
+    file in it (extracting beside it). Returns how many files were tried."""
+    if find_artifacts(tree).rootfs is not None or shutil.which("unblob") is None:
+        return 0
+    files = sorted(p for p in tree.rglob("*") if p.is_file() and not p.is_symlink() and p.stat().st_size >= NESTED_MIN_BYTES)
+    for i, path in enumerate(files):
+        run_unblob(path, work, tree=tree, tag=f"-nested{i}")
+    return len(files)
 
 
 def _non_empty(p: Path) -> bool:
@@ -191,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         if tarfile.is_tarfile(args.input):
             rows = safe_extract_tar(args.input, args.work / "tree")
             tree = args.work / "tree"
+            unpack_nested(tree, args.work)
         else:
             tree, rows = run_unblob(args.input, args.work), []
         rows = rows + sanitize_tree(tree)
