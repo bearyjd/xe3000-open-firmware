@@ -185,7 +185,7 @@ main() {
   [[ $limit =~ ^[1-9][0-9]*$ ]] || die "HARVEST_TIMEOUT must be a positive number of seconds"
   command -v timeout >/dev/null 2>&1 || die "the 'timeout' command (coreutils) is required"
 
-  local ts suffix="" dir frames manifest stream ssh_rc=0
+  local ts suffix="" dir frames manifest stream tarf shaf ssh_rc=0
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   if ((probe)); then suffix=-probe; fi
   confine_out
@@ -198,6 +198,12 @@ main() {
   stream="$dir/stream.txt"
   mkdir -m 0700 "$frames"
   : >"$manifest"
+  tarf="$OUT_BASE/$ts$suffix.tar"
+  shaf="$tarf.sha256"
+  # Artifacts are created exclusively (never through a pre-existing file or symlink).
+  if [[ -e $tarf || -L $tarf || -e $shaf || -L $shaf ]]; then
+    die "refusing to overwrite an existing artifact: $tarf"
+  fi
 
   timeout -k 10 "$limit" ssh "${SSH_OPTS[@]}" "root@$ROUTER_HOST" "$remote_cmd" \
     <"$COLLECT" >"$stream" 2>"$dir/ssh.stderr" || ssh_rc=$?
@@ -209,8 +215,16 @@ main() {
     printf 'done_marker\t%s\n' "$saw_done"
   } >>"$manifest"
 
-  tar -C "$OUT_BASE" -cf "$OUT_BASE/$ts$suffix.tar" "$ts$suffix"
-  (cd "$OUT_BASE" && sha256sum "$ts$suffix.tar" >"$ts$suffix.tar.sha256")
+  (
+    set -C
+    umask 077
+    tar -C "$OUT_BASE" -cf - "$ts$suffix" >"$tarf"
+  ) || die "cannot create archive $tarf"
+  (
+    set -C
+    umask 077
+    cd "$OUT_BASE" && sha256sum "$ts$suffix.tar" >"$ts$suffix.tar.sha256"
+  ) || die "cannot create checksum $shaf"
 
   printf 'frames_ok=%s partial=%s rejected=%s missing=%s skipped=%s capped=%s done_marker=%s ssh_exit=%s\n' \
     "$n_ok" "$n_partial" "$n_rej" "$n_missing" "$n_skipped" "$n_capped" "$saw_done" "$ssh_rc"
