@@ -51,7 +51,7 @@ ALLOWED_EXTERNAL = {
 
 # Assignments whose value is pinned (raw text after the '=').
 PINNED_ASSIGN = {
-    "TMO": {'"timeout 10"', ""},
+    "TMO": {"timeout 10", ""},
     "ff_p": {"$2"},
     "PATH": {"/usr/sbin:/usr/bin:/sbin:/bin"},
     "FDT": {"/sys/firmware/fdt"},
@@ -196,7 +196,10 @@ def _segs(text, func, line, top):
             m = re.match(r"^(\w+)=(\S*)\s*", seg)
             if not m:
                 break
-            assigns.append((m.group(1), _restore(m.group(2), store)))
+            val = _restore(m.group(2), store)
+            if len(val) >= 2 and val[0] == val[-1] == '"':
+                val = val[1:-1]  # quoted literal (SC2209); pinned value must still match exactly
+            assigns.append((m.group(1), val))
             seg = seg[m.end():]
         seg = _restore(seg, store)
         if assigns or seg:
