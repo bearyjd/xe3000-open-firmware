@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: extractions/setup-just@e33e0265a09d6d736e2ee1e0eb685ef1de4669ff # v3.0.0
+      - name: Offline suite (same recipe as local)
+        run: PODMAN=podman just test
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: |
+          shellcheck scripts/*.sh hooks/pre-commit
+          if [ -f scripts/remote/collect.sh ]; then
+            shellcheck -s sh scripts/remote/collect.sh
+          fi
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (pinned image digest, baseline for known synthetic strings)
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -eu
+          image="$(cat containers/gitleaks.image)"
+          if [ "$EVENT" = "pull_request" ]; then
+            scope="--log-opts=origin/main..HEAD"   # only commits new in the PR
+          else
+            scope=""                                # push to main: full history and tree
+          fi
+          docker run --rm -v "$PWD:/repo:ro" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+            "$image" git /repo --no-banner --redact \
+            --baseline-path /repo/.gitleaks-baseline.json $scope
+
+  hook-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: pre-commit hook tests
+        run: |
+          python3 -m pip install --user pytest==9.1.1
+          cd tests && python3 -m pytest -c pytest.ini test_hook.py -q -p no:cacheprovider
