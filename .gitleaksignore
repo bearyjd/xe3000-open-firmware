@@ -1,0 +1,2 @@
+# Historical synthetic test fixture (fake credential), fixed on this branch; fingerprint only, no secret value.
+7dafbb6a9f72a67a3c42bea83cb88799bc7f9ab5:tests/test_harvest.py:curl-auth-user:197

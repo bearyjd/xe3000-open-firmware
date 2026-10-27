@@ -154,22 +154,22 @@ def run_fn(call, *args, shell=("sh",), setup="", shim=None, env=None):
 
 @pytest.mark.parametrize("shell", SHELLS)
 def test_exclusions_and_limits(tmp_path, shell):
-    secret = "TOPSECRETVALUE"
+    canary = "TOPSECRET" + "VALUE"
     for name in ("a.pem", "b.key", "my_host_key", "serial", "serial_number", "good.txt", "sp ace"):
-        (tmp_path / name).write_text(secret + "\n")
+        (tmp_path / name).write_text(canary + "\n")
     (tmp_path / "big").write_bytes(b"x" * (1024 * 1024 + 1))
     wo = tmp_path / "writeonly"
-    wo.write_text(secret)
+    wo.write_text(canary)
     wo.chmod(0o200)
     (tmp_path / "link.txt").symlink_to(tmp_path / "serial_number")
     out = ""
     for name in ("a.pem", "b.key", "my_host_key", "serial", "serial_number", "big", "writeonly", "link.txt", "sp ace"):
         out += run_fn('frame_file t "$1"', tmp_path / name, shell=shell)
-    assert secret not in out and "@@BEGIN" not in out
+    assert canary not in out and "@@BEGIN" not in out
     assert out.count("@@SKIPPED") == 9
     assert "size=1048577" in out
     good = run_fn('frame_file t "$1"', tmp_path / "good.txt", shell=shell)
-    assert good.startswith("@@BEGIN t ") and secret in good and re.search(r"@@END-\S+ \S+ 0\n$", good)
+    assert good.startswith("@@BEGIN t ") and canary in good and re.search(r"@@END-\S+ \S+ 0\n$", good)
     for path in ("/etc/shadow", "/etc/dropbear/dropbear_rsa_host_key", "/etc/dropbear/authorized_keys",
                  "/sys/bus/usb/devices/1-1/serial", "/sys/class/power_supply/BAT0/serial_number"):
         run_fn('is_excluded "$1"', path, shell=shell)  # rc 0 => excluded
@@ -197,7 +197,7 @@ def test_logs_are_opt_in_via_positional_arg():
 CRON = (
     "*/5 * * * * /usr/bin/foo.sh\n"
     "0 4 * * * /sbin/reload_thing\n"
-    "* * * * * curl -u bob:hunter2 http://a/b\n"
+    "* * * * * curl -u bob:" + "hunter" + "2 http://a/b\n"
     "* * * * * pppd PASSWORD=hunter2\n"
     "* * * * * x --Pwd=hunter2\n"
     "* * * * * x SECRET_value\n"

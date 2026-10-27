@@ -48,7 +48,9 @@ clean() {
 
 valid_name() {
   local n=$1 seg
-  [[ ${#n} -le 200 && $n =~ $NAME_RE && $n != *.PARTIAL ]] || return 1
+  if ! [[ ${#n} -le 200 && $n =~ $NAME_RE && $n != *.PARTIAL ]]; then
+    return 1
+  fi
   local IFS=/
   for seg in $n; do
     [[ $seg == . || $seg == .. ]] && return 1
