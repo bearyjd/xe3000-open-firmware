@@ -29,7 +29,9 @@ Phase 0 — scaffold and LLM-assisted recon engine, built and tested on syntheti
 | `docs/prp/` | Product requirement prompts (written before implementation, with devil's-advocate review) |
 | `docs/findings/` | Generated findings (from `findings/raw/`) |
 | `scripts/` | `recon/` engine, harvest + redaction tooling |
-| `containers/` | Podman build/analysis images |
+| `containers/` | Podman build/analysis image, pinned gitleaks image digest, independent `gitleaks.toml` |
+| `tests/` | Offline pytest suite (FakeClient, runtime-generated fixtures) |
+| `justfile` | `build`, `test`, `preflight`, `analyze`, `dry-run` (`PODMAN` env selects the podman command) |
 | `hooks/` | Git hooks (`scripts/install-hooks.sh` enables them) |
 
 ## Setup

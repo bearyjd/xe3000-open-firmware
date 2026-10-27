@@ -1,0 +1,142 @@
+# Independent pre-flight rules for PRP 0001. Deliberately NOT derived from scripts/recon/redact.py and
+# does not extend gitleaks' defaults: a bug in one rule set must not hide in the other.
+# Regexes are Go RE2 (no look-around). Placeholders look like <REDACTED:rule>; every value class below
+# excludes a leading '<' so a redacted value never matches.
+title = "xe3000-open-firmware recon pre-flight"
+
+[[rules]]
+id = "uci-secret-option"
+description = "UCI option/list whose name suggests a secret, with a non-redacted value"
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+\S*(?:key|psk|pass|passwd|password|secret|token|private|auth|sid|hash|cert|username)\S*[ \t]+['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "wifi-psk-line"
+description = "hostapd/wpa_supplicant style credential line"
+regex = '''(?im)\b(?:psk|sae_password|wpa_passphrase|password)[ \t]*=[ \t]*([^\s<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "wg-key-line"
+description = "WireGuard PrivateKey/PresharedKey line"
+regex = '''(?i)\b(?:PrivateKey|PresharedKey)[ \t]*=[ \t]*([^\s<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "wg-key-option"
+description = "UCI private_key/preshared_key option"
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:private_key|preshared_key)[ \t]+['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "wg-base64-44"
+description = "Standalone 44-character base64 blob (WireGuard key shape)"
+regex = '''(?:^|[^A-Za-z0-9+/=])([A-Za-z0-9+/]{43}=)(?:[^A-Za-z0-9+/=]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "private-key-pem"
+description = "PEM private key block"
+regex = '''(?s)-----BEGIN[ A-Z]*PRIVATE KEY( BLOCK)?-----.{20,}?-----END[ A-Z]*PRIVATE KEY( BLOCK)?-----'''
+
+[[rules]]
+id = "private-key-begin"
+description = "Private key header, even when the block is unterminated"
+regex = '''-----BEGIN[ A-Z]*PRIVATE KEY( BLOCK)?-----'''
+
+[[rules]]
+id = "crypt-hash"
+description = "crypt(3) password hash"
+regex = '''\$(?:1|5|6|y|p)\$[./0-9A-Za-z$,=-]{6,}'''
+
+[[rules]]
+id = "imei-like-digit-run"
+description = "Bare 15-digit run (IMEI/IMSI shape)"
+regex = '''(?:^|[^0-9A-Za-z])(\d{15})(?:[^0-9A-Za-z]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "imei-label"
+description = "Value after an IMEI/MEID label"
+regex = '''(?i)\b(?:imei|meid)\b[\s:='"]{0,6}([0-9A-Fa-f]{14,18})'''
+secretGroup = 1
+
+[[rules]]
+id = "imsi-label"
+description = "Value after an IMSI label"
+regex = '''(?i)\bimsi\b[\s:='"]{0,6}(\d{6,15})'''
+secretGroup = 1
+
+[[rules]]
+id = "iccid"
+description = "SIM ICCID: 89 plus 17-18 digits"
+regex = '''(?:^|[^0-9A-Za-z])(89\d{17,18})(?:[^0-9A-Za-z]|$)'''
+secretGroup = 1
+
+[[rules]]
+id = "iccid-label"
+description = "Value after an ICCID label"
+regex = '''(?i)\biccid\b[\s:='"]{0,6}(\d{10,22})'''
+secretGroup = 1
+
+[[rules]]
+id = "bearer-token"
+description = "HTTP bearer credential"
+regex = '''(?i)\bbearer[ \t]+([A-Za-z0-9._~+/=-]{16,})'''
+secretGroup = 1
+
+[[rules]]
+id = "api-key-sk"
+description = "sk- style API key"
+regex = '''\b(sk-[A-Za-z0-9_-]{20,})'''
+secretGroup = 1
+
+[[rules]]
+id = "labeled-secret"
+description = "Long token-like value after a token/secret/key/sid/cookie label"
+regex = '''(?i)\b\w*(?:token|secret|key|sid|cookie)\w*[ \t]*[:=][ \t]*['"]?([A-Za-z0-9+/_=-]{4,})'''
+secretGroup = 1
+
+[[rules]]
+id = "json-secret-value"
+description = "JSON string value under a secret-looking key"
+regex = '''(?i)"[^"\n]*(?:pass|psk|token|secret|sid|hash|key|auth|cert|username)[^"\n]*"\s*:\s*"([^"<\n][^"\n]*)"'''
+secretGroup = 1
+
+[[rules]]
+id = "json-pin-number"
+description = "JSON PIN/PUK value"
+regex = '''(?i)"(?:[^"\n]*[^a-z"\n])?(?:pin|pincode|puk)(?:[^a-z"\n][^"\n]*)?"\s*:\s*"?(\d{3,10})'''
+secretGroup = 1
+
+[[rules]]
+id = "json-rpc-sid"
+description = "First positional parameter (session id) of a JSON-RPC call"
+regex = '''(?i)"params"\s*:\s*\[\s*"([^"<\s]{8,})"'''
+secretGroup = 1
+
+[[rules]]
+id = "uci-set-secret"
+description = "uci set/add_list of a secret-looking option"
+regex = '''(?i)\buci[ \t]+(?:-\S+[ \t]+)*(?:set|add_list)[ \t]+\S*(?:pass|psk|key|secret|token|private|auth|sid|hash|cert|username)\S*?=['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "assign-secret-name"
+description = "NAME=value where NAME ends in a password/psk-like word (any prefix, e.g. ap_password=)"
+regex = '''(?i)(?:^|[^A-Za-z0-9])[A-Za-z0-9_.\-]*(?:psk|passw(?:or)?d|passphrase)[ \t]*=[ \t]*['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "generic-quoted-entropy"
+description = "High-entropy quoted string of 20+ characters (catches formats no rule knows)"
+regex = '''['"]([A-Za-z0-9+_=\-]{20,})['"]'''
+entropy = 3.5
+secretGroup = 1
+
+[[rules]]
+id = "generic-assigned-entropy"
+description = "High-entropy value of 24+ characters after = or :"
+regex = '''(?m)[=:][ \t]*([A-Za-z0-9+_=\-]{24,})(?:[ \t]|$)'''
+entropy = 4.0
+secretGroup = 1

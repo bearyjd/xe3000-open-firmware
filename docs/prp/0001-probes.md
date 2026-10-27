@@ -178,3 +178,37 @@ Questions the reviewer must answer, with answers recorded here after the review 
 5. **Is `/sys/firmware/fdt` the live tree?** It is the DT the kernel booted with, which is what we want, but GL's U-Boot may patch it at boot, so it can differ from the DTB in the image. Both are collected on purpose.
 6. **Cost of being wrong on Batches + structured outputs.** Docs are silent; hence the live batch check.
 7. **Why not just reverse the image offline and skip live probing?** Runtime state (which process owns which modem port, actual GPIO states, loaded module params) is not in the image. Live probing is still worth it, but each probe must justify itself against what Phase 2 can learn statically.
+
+---
+
+## 11. Phase 0 results and review (2026-10-26)
+
+**Tests:** 293 passed, 1 skipped (the single test that needs nested podman), 97% line coverage, run in the recon container. The host-podman pre-flight path was checked by hand: clean tree gives a stamp; with one redaction rule disabled it aborts printing file, line and rule only.
+
+**Live checks on synthetic fixtures** (planted fake secrets generated at run time, redacted, pre-flighted, then analysed):
+
+| Check | Result |
+|---|---|
+| Sonnet 5.5 interactive run, 6 chunks | 12 accepted, 0 rejected, actual $0.0386 (worst-case estimate $0.1414, cap $0.25) |
+| Re-run with identical input | 6/6 chunks served from cache, $0.0000 |
+| Cap enforcement | a run whose worst case was $0.2643 was refused before anything was sent |
+| Haiku 5.5 batch with `output_config` | accepted by the API; resumed from the saved batch id: 13 accepted, 1 rejected, actual $0.0013. The doc gap (batch + structured outputs) is closed. |
+
+**Independent reviews** (code-reviewer and security-reviewer, run separately from the authoring pass) found 0 critical, 3 high and ~14 medium/low issues. All were fixed with tests: cache poisoning by rejected or cap-skipped results, an unbudgeted sync fallback after batch errors, lost work on mid-run failure, a non-upper-bound cost estimate, nan/inf cap values, an incomplete cache key, a read-versus-hash gap on file contents, binary files, redaction gaps (JSON secrets, GL login hash/sid, prefixed names, SIM PIN, PGP/unterminated PEM, bare IMSI, other MAC/IPv6 forms), a forgeable pre-flight stamp, markdown injection into committed reports, container hardening and the pre-commit hook's handling of unusual paths.
+
+**Defects found only by live runs:** a single poll timeout killed a batch run (fixed: free polling calls retry, `--resume-batch` added); a false-positive `ungrounded` flag on prose such as "RPC method for" (fixed).
+
+### Devil's-advocate answers
+
+1. *Is an LLM needed?* On fixtures the findings mostly restate ground truth with a purpose label (AT+CFUN=1 written at start, GPIO 12 exported, fan on a GPIO). The value is in linking items across files, which only real data can show. **Decision:** keep, but Phase 2 reports must separate "restates ground truth" from "adds a link", and the engine stays optional for anything grep can answer.
+2. *Is redaction trustworthy?* The review found real gaps and they were closed, but it is still pattern based and the gitleaks layer shares the author's assumptions. **Residual risk accepted with a gate:** the user spot-checks `redaction-report.json` and a sample of `harvest/redacted/` before any Phase 2 API call.
+3. *Evidence check is theater?* Partly. It proves the text exists near the cited line (and now requires at least 8 non-space characters), not that the claim follows. Reports show the evidence so a human can judge.
+4. *Fragile ssh stream?* Open for Phase 1: a partial frame must be marked partial and excluded from analysis.
+5. *`/sys/firmware/fdt` versus image DTB?* Both are collected on purpose; the diff is itself a finding.
+6. *Batch plus structured outputs?* Verified live (above).
+7. *Skip live probing?* Kept, because runtime ownership of modem ports and live GPIO/module state is not in the image, but every probe in §6 should justify itself.
+
+### Known limitations
+- The `ungrounded` heuristics for prose RPC names are best effort.
+- Retries run as normal calls at full price, even in batch runs.
+- Prices are copied from the docs table dated 2026-10-26 and must be refreshed when models change.
