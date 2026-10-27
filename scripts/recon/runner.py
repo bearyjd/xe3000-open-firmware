@@ -14,6 +14,7 @@ from recon import chunking, cost, groundtruth, preflight, prompts, schema
 from recon.cache import Cache, cache_key
 from recon.chunking import Chunk
 from recon.client import ModelResponse
+from recon.redact import _is_excluded as is_excluded
 from recon.redact import redact_text
 from recon.scrub import scrub
 
@@ -228,7 +229,7 @@ def _manifest(cfg: RunConfig, status: str, est: cost.Estimate, meta: dict, ledge
     actual = round(sum(c["usd"] for c in ledger.calls), 6)
     return {
         "run_id": cfg.run_id, "status": status, "created_utc": datetime.now(timezone.utc).isoformat(),
-        "model": cfg.model, "synth_model": cfg.synth_model if synthesis else None,
+        "model": cfg.model, "max_tokens": cfg.max_tokens, "synth_model": cfg.synth_model if synthesis else None,
         "prompt_version": prompts.PROMPT_VERSION, "schema_version": schema.SCHEMA_VERSION,
         "batch": cfg.batch, "batch_id": meta.get("batch_id"),
         "inputs": {"tree_sha256": meta["digest"], "files": meta["files"]}, "skipped": meta["skipped"],
@@ -237,7 +238,7 @@ def _manifest(cfg: RunConfig, status: str, est: cost.Estimate, meta: dict, ledge
         "estimate": {"input_tokens": est.input_tokens, "max_output_tokens": est.max_output_tokens,
                      "worst_case_usd": round(est.usd, 6)},
         "committed_usd": round(ledger.committed_usd, 6),
-        "actual": {**totals, "usd": actual}, "error": scrub(error) if error else None,
+        "actual": {**totals, "usd": actual, "covers": "this invocation only"}, "error": scrub(error) if error else None,
     }
 
 
@@ -266,7 +267,22 @@ def _prior_manifest(run_dir: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _prepare_run_dir(run_dir: Path, cfg: RunConfig) -> float:
+def _check_resumable(prior: dict, cfg: RunConfig, digest: str) -> None:
+    if not prior.get("batch_id"):
+        raise RunRefused(f"nothing to resume: findings/raw/{cfg.run_id} has no recorded batch id")
+    if prior["batch_id"] != cfg.resume_batch_id:
+        raise RunRefused(f"batch id {cfg.resume_batch_id} does not match the one recorded for this run")
+    if prior.get("status") != "batch-pending":
+        raise RunRefused(f"cannot resume: prior status is {prior.get('status')!r}, expected 'batch-pending'")
+    if (prior.get("inputs") or {}).get("tree_sha256") != digest:
+        raise RunRefused("cannot resume: the input tree changed since the batch was created")
+    if prior.get("model") != cfg.model:
+        raise RunRefused(f"cannot resume: model differs (batch was created with {prior.get('model')!r})")
+    if prior.get("max_tokens") != cfg.max_tokens:
+        raise RunRefused(f"cannot resume: max_tokens differs (batch used {prior.get('max_tokens')!r})")
+
+
+def _prepare_run_dir(run_dir: Path, cfg: RunConfig, digest: str) -> float:
     """Create the run dir, or validate it for --resume-batch. Returns cost already committed (resume only)."""
     prior = _prior_manifest(run_dir) if run_dir.exists() else {}
     if cfg.resume_batch_id is None:
@@ -275,10 +291,7 @@ def _prepare_run_dir(run_dir: Path, cfg: RunConfig) -> float:
             raise RunRefused(f"run directory already exists: findings/raw/{cfg.run_id}{hint}")
         run_dir.mkdir(parents=True)
         return 0.0
-    if not prior.get("batch_id"):
-        raise RunRefused(f"nothing to resume: findings/raw/{cfg.run_id} has no recorded batch id")
-    if prior["batch_id"] != cfg.resume_batch_id:
-        raise RunRefused(f"batch id {cfg.resume_batch_id} does not match the one recorded for this run")
+    _check_resumable(prior, cfg, digest)
     return float(prior.get("committed_usd") or 0.0)
 
 
@@ -293,6 +306,9 @@ def _load_inputs(cfg: RunConfig):
     for _dir, items in groups:
         for name, data in items:
             files.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
+            if is_excluded(Path(name)):  # shadow, serial*, dropbear, *.pem, *.key, *_host_key
+                skipped.append({"name": name, "reason": "excluded"})
+                continue
             if b"\0" in data or name.lower().endswith(BINARY_SUFFIXES):
                 skipped.append({"name": name, "reason": "binary"})
                 continue
@@ -301,10 +317,17 @@ def _load_inputs(cfg: RunConfig):
     return digest, files, skipped, texts
 
 
-def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str], None] = print,
-        sleep: Callable[[float], None] = time.sleep) -> RunResult:
-    _validate_run_id(cfg.run_id)
-    digest, files, skipped, texts = _load_inputs(cfg)
+def _write_failure(run_dir: Path, manifest: dict, ledger: _Ledger) -> None:
+    """Record a failed invocation. Existing findings/rejected (e.g. from an earlier invocation) are kept."""
+    for name in ("findings.jsonl", "rejected.jsonl"):
+        if not (run_dir / name).exists():
+            (run_dir / name).write_text("")
+    (run_dir / "usage.json").write_text(json.dumps({"calls": ledger.calls, "totals": manifest["actual"]}, indent=2))
+    _write_manifest(run_dir, manifest)
+
+
+def _plan(cfg: RunConfig, texts: dict, results: dict):
+    """Chunk the inputs and satisfy what the cache can (re-validated). Returns (chunks, keys, truth, pending)."""
     trusted = {n: t for n, t in texts.items() if chunking.classify(n) in chunking.TRUSTED_TYPES}
     truth = groundtruth.extract(trusted)
     chunks = chunking.chunk_files(sorted(texts.items()), cfg.max_chunk_lines)
@@ -312,44 +335,36 @@ def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str
     keys = {c.chunk_id: cache_key(c.render(), prompts.PROMPT_VERSION, cfg.model, schema.SCHEMA_VERSION,
                                   schema_hash=schema.schema_hash(), prompt_hash=prompts.prompt_hash(c.artifact_type),
                                   max_tokens=cfg.max_tokens) for c in chunks}
-    results: dict[str, dict] = {}
     for c in chunks:
         entry = cache.get(keys[c.chunk_id])
         hit = _from_cache(entry, c, truth) if entry is not None else None
         if hit is not None:
             results[c.chunk_id] = {"accepted": hit, "rejected": [], "clean": True}
-    pending = [c for c in chunks if c.chunk_id not in results]
-    cached = len(chunks) - len(pending)
-    client = client_factory()
+    return chunks, keys, truth, [c for c in chunks if c.chunk_id not in results]
+
+
+def _execute(cfg, client, pending, truth, keys, counts, ledger, meta, results, on_created, sleep) -> None:
+    cache = Cache(cfg.root / RESPONSES_DIR)
+    firsts = _submit_batch(pending, cfg, client, meta, on_created, sleep) if cfg.batch and pending else {}
+    for chunk in pending:  # each chunk is cached the moment it completes cleanly
+        res = _analyze_chunk(chunk, truth, cfg, client, ledger, counts[chunk.chunk_id],
+                             firsts.get(chunk.chunk_id), cfg.batch)
+        results[chunk.chunk_id] = res
+        if res["clean"]:
+            cache.put(keys[chunk.chunk_id], {"findings": res["accepted"]})
+
+
+def _estimate(cfg, client, pending, out, cached):
     counts = {c.chunk_id: client.count_tokens(cfg.model, prompts.system_blocks(c.artifact_type),
                                               [{"role": "user", "content": prompts.user_message(c.render())}])
               for c in pending}
     est = cost.estimate(cfg.model, list(counts.values()), max_tokens=cfg.max_tokens, batch=cfg.batch)
     out(_format_estimate(est, cached, cfg))
     cost.check_caps(est, max_usd=cfg.max_usd, max_input_tokens=cfg.max_input_tokens)  # before any send
-    if cfg.dry_run:
-        out("dry run: nothing sent")
-        return RunResult("dry-run", est, 0, 0, 0.0, None)
-    run_dir = cfg.root / "findings" / "raw" / cfg.run_id
-    committed = _prepare_run_dir(run_dir, cfg)
-    ledger = _Ledger(max(est.usd, committed), [])
-    meta = {"digest": digest, "files": files, "skipped": skipped, "batch_id": cfg.resume_batch_id}
-    tally = {"chunks": len(chunks), "cached": cached, "accepted": 0, "rejected": 0}
-    try:
-        def on_created(batch_id: str) -> None:
-            meta["batch_id"] = batch_id
-            _write_manifest(run_dir, _manifest(cfg, "batch-pending", est, meta, ledger, tally, False))
-        firsts = _submit_batch(pending, cfg, client, meta, on_created, sleep) if cfg.batch and pending else {}
-        for chunk in pending:  # each chunk is cached the moment it completes cleanly
-            res = _analyze_chunk(chunk, truth, cfg, client, ledger, counts[chunk.chunk_id],
-                                 firsts.get(chunk.chunk_id), cfg.batch)
-            results[chunk.chunk_id] = res
-            if res["clean"]:
-                cache.put(keys[chunk.chunk_id], {"findings": res["accepted"]})
-    except Exception as exc:  # noqa: BLE001 - recorded scrubbed, original chain dropped
-        message = scrub(f"{type(exc).__name__}: {exc}")
-        _write_outputs(run_dir, _manifest(cfg, "error", est, meta, ledger, tally, False, message), [], [], ledger, None)
-        raise RunFailed(message) from None
+    return counts, est
+
+
+def _finish(cfg, client, chunks, results, run_dir, est, meta, ledger, tally, out) -> RunResult:
     findings = [f for c in chunks for f in results[c.chunk_id]["accepted"]]
     rejected = [r for c in chunks for r in results[c.chunk_id]["rejected"]]
     synthesis = None
@@ -363,3 +378,33 @@ def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str
     actual = _write_outputs(run_dir, manifest, findings, rejected, ledger, synthesis)
     out(f"done: {len(findings)} accepted, {len(rejected)} rejected, actual ${actual:.4f} -> findings/raw/{cfg.run_id}")
     return RunResult("ok", est, len(findings), len(rejected), actual, run_dir)
+
+
+def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str], None] = print,
+        sleep: Callable[[float], None] = time.sleep) -> RunResult:
+    _validate_run_id(cfg.run_id)
+    digest, files, skipped, texts = _load_inputs(cfg)
+    results: dict[str, dict] = {}
+    chunks, keys, truth, pending = _plan(cfg, texts, results)
+    cached = len(chunks) - len(pending)
+    client = client_factory()
+    counts, est = _estimate(cfg, client, pending, out, cached)
+    if cfg.dry_run:
+        out("dry run: nothing sent")
+        return RunResult("dry-run", est, 0, 0, 0.0, None)
+    run_dir = cfg.root / "findings" / "raw" / cfg.run_id
+    ledger = _Ledger(max(est.usd, _prepare_run_dir(run_dir, cfg, digest)), [])
+    meta = {"digest": digest, "files": files, "skipped": skipped, "batch_id": cfg.resume_batch_id}
+    tally = {"chunks": len(chunks), "cached": cached, "accepted": 0, "rejected": 0}
+
+    def on_created(batch_id: str) -> None:
+        meta["batch_id"] = batch_id
+        _write_manifest(run_dir, _manifest(cfg, "batch-pending", est, meta, ledger, tally, False))
+    try:
+        _execute(cfg, client, pending, truth, keys, counts, ledger, meta, results, on_created, sleep)
+    except Exception as exc:  # noqa: BLE001 - recorded scrubbed, original chain dropped
+        message = scrub(f"{type(exc).__name__}: {exc}")
+        status = "batch-pending" if meta["batch_id"] else "error"  # a created batch stays resumable
+        _write_failure(run_dir, _manifest(cfg, status, est, meta, ledger, tally, False, message), ledger)
+        raise RunFailed(message) from None
+    return _finish(cfg, client, chunks, results, run_dir, est, meta, ledger, tally, out)

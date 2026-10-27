@@ -258,7 +258,7 @@ def test_gitleaks_has_its_own_rules_for_labelled_secrets(root, line):
     (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
     (root / "harvest" / "redacted" / "etc" / "x.txt").write_text(line + "\n")  # NOT passed through the redactor
     res = _scan(root, [root / "harvest" / "redacted"])
-    assert res.stamp is None and [h.file for h in res.hits] == ["redacted/etc/x.txt"], res.hits
+    assert res.stamp is None and {h.file for h in res.hits} == {"redacted/etc/x.txt"}, res.hits
 
 
 @pytest.mark.requires_gitleaks

@@ -23,7 +23,6 @@ EXCLUDED = "excluded"
 LUHN_LEN = 15
 MAC_HASH_HEX_LEN = 6
 
-MIN_LABELLED_TOKEN = 4
 SENSITIVE = r"key|psk|pass|passwd|password|passphrase|secret|token|private|auth|sid|hash|cert|username"
 PIN_WORDS = r"pin|pincode|puk"  # whole words only: 'mapping' and 'spinner' must survive
 NOT_ALNUM = r"(?<![A-Za-z0-9])"
@@ -57,10 +56,16 @@ ICCID_BARE = re.compile(r"(?<![0-9A-Za-z])89\d{17,18}(?![0-9A-Za-z])")
 ICCID_LABEL = re.compile(rf"(\bICCID\b{LABEL_SEP})(\d{{10,22}})", re.IGNORECASE)
 BEARER = re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
 SK_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}")
-TOKEN_LABEL = re.compile(
-    rf"(\b\w*(?:token|secret|key|sid|cookie)\w*[ \t]*[:=][ \t]*[\x27\"]?)([A-Za-z0-9+/_=-]{{{MIN_LABELLED_TOKEN},}})",
-    re.IGNORECASE,
-)
+# Labelled secrets: NAME = value or NAME: value; the WHOLE value goes (quoted to the closing quote, else to
+# whitespace), so dots, '!', '@' and '~' do not end the match. Whether NAME is secret is decided in code.
+LABELLED = re.compile(
+    r"(?<![A-Za-z0-9])([A-Za-z0-9_.\-]*[A-Za-z0-9_])([ \t]*[=:][ \t]*)(\"[^\"\n]*\"|'[^'\n]*'|[^\s\"']\S*)", re.MULTILINE)
+AUTH_HEADER = re.compile(r"(\bAuthorization[ \t]*[:=][ \t]*(?:[A-Za-z][\w-]*[ \t]+)?)(\S+)", re.IGNORECASE)
+NAME_SPLIT = re.compile(r"[_.\-]|(?<=[a-z])(?=\d)|\d+$")
+SECRET_TAILS = ("key", "psk", "passwd", "password", "passphrase", "secret", "token", "hash", "auth", "cookie")
+SECRET_WORDS = frozenset({"pass", "sid", "pin", "puk", "pincode", "private", "cert", "username"})
+BENIGN_LAST = frozenset({"mgmt", "type", "mode", "policy", "len", "length", "size", "count", "file", "path",
+                         "enabled", "timeout", "lifetime", "interval", "proto", "alg", "algo"})
 MAC_COLON = re.compile(r"\b([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){2}):([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){2})\b")
 MAC_DASH = re.compile(r"\b([0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){2})-([0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){2})\b")
 EUI64 = re.compile(r"(?<![0-9A-Za-z:])((?:[0-9A-Fa-f]{0,4}:){1,8})[0-9A-Fa-f]{1,4}:[0-9A-Fa-f]{2}ff:fe[0-9A-Fa-f]{2}:"
@@ -85,6 +90,8 @@ def luhn_ok(digits: str) -> bool:
 def _sub_value(pattern: re.Pattern, rule: str) -> Callable[[str, Counter], str]:
     def apply(text: str, counts: Counter) -> str:
         def repl(m: re.Match) -> str:
+            if m.lastindex and m.lastindex >= 2 and m.group(2).startswith("<REDACTED"):
+                return m.group(0)  # already redacted by an earlier rule
             counts[rule] += 1
             return m.group(1) + _tag(rule)
         return pattern.sub(repl, text)
@@ -111,6 +118,34 @@ def _json_secret(text: str, counts: Counter) -> str:
     return JSON_RPC_SID.sub(sid, JSON_KV.sub(kv, text))
 
 
+def _is_secret_name(name: str) -> bool:
+    tokens = [t.lower() for t in re.split(r"[_.\-]", name) if t]
+    tokens = [re.sub(r"\d+$", "", t) for t in tokens]
+    tokens = [t for t in tokens if t]
+    if not tokens or tokens[-1] in BENIGN_LAST:
+        return False
+    return any(t in SECRET_WORDS or t.endswith(SECRET_TAILS) for t in tokens[-2:] if t)
+
+
+def _labelled(text: str, counts: Counter) -> str:
+    def repl(m: re.Match) -> str:
+        name, sep, value = m.groups()
+        if value.startswith("<REDACTED") or not _is_secret_name(name):
+            return m.group(0)
+        counts["labelled-secret"] += 1
+        return name + sep + _tag("labelled-secret")
+    return LABELLED.sub(repl, text)
+
+
+def _auth_header(text: str, counts: Counter) -> str:
+    def repl(m: re.Match) -> str:
+        if m.group(2).startswith("<REDACTED"):
+            return m.group(0)
+        counts["auth-header"] += 1
+        return m.group(1) + _tag("auth-header")
+    return AUTH_HEADER.sub(repl, text)
+
+
 def _luhn_digits(text: str, counts: Counter) -> str:
     def repl(m: re.Match) -> str:
         if not luhn_ok(m.group(0)):
@@ -132,6 +167,8 @@ def _chain(*steps: Callable[[str, Counter], str]) -> Callable[[str, Counter], st
 RULES: tuple[tuple[str, Callable[[str, Counter], str]], ...] = (
     ("pem-block", _sub_whole(PEM, "pem-block")),
     ("json-secret", _json_secret),
+    ("auth-header", _auth_header),
+    ("labelled-secret", _labelled),
     ("uci-sensitive", _chain(_sub_value(UCI, "uci-sensitive"), _sub_value(UCI_SHELL, "uci-sensitive"))),
     ("wifi-psk", _sub_value(WIFI, "wifi-psk")),
     ("wg-key", _chain(_sub_value(WG_LINE, "wg-key"), _sub_value(WG_OPT, "wg-key"), _sub_whole(WG_B64, "wg-key"))),
@@ -139,7 +176,7 @@ RULES: tuple[tuple[str, Callable[[str, Counter], str]], ...] = (
     ("imei", _chain(_sub_value(IMEI_LABEL, "imei"), _luhn_digits)),
     ("imsi", _chain(_sub_value(IMSI_LABEL, "imsi"), _sub_whole(IMSI_BARE, "imsi"))),
     ("iccid", _chain(_sub_value(ICCID_LABEL, "iccid"), _sub_whole(ICCID_BARE, "iccid"))),
-    ("token", _chain(_sub_value(BEARER, "token"), _sub_whole(SK_KEY, "token"), _sub_value(TOKEN_LABEL, "token"))),
+    ("token", _chain(_sub_value(BEARER, "token"), _sub_whole(SK_KEY, "token"))),
     ("eui64", _sub_value(EUI64, "eui64")),
 )
 RULE_NAMES = tuple(name for name, _ in RULES) + ("mac",)
@@ -174,6 +211,7 @@ def _is_excluded(rel: Path) -> bool:
     name = rel.name.lower()
     return (
         name in EXCLUDED_NAMES
+        or name.startswith("serial")
         or "dropbear" in parts
         or name.endswith("_host_key")
         or name.endswith(EXCLUDED_SUFFIXES)

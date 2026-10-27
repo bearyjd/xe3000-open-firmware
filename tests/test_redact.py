@@ -31,8 +31,8 @@ def test_every_planted_secret_removed(tmp_path):
         for v in s.values:
             assert v not in out, s.name
     assert "<REDACTED:" in out
-    rules = {r["rule"] for r in report}
-    assert {s.redact_rule for s in SAMPLES} <= rules
+    # the generic labelled-secret rule may pre-empt a specific one, so check per file rather than per rule name
+    assert {s.path for s in SAMPLES} <= {r["file"] for r in report}
 
 
 @pytest.mark.parametrize("sample", SAMPLES, ids=lambda s: s.name)
@@ -64,7 +64,7 @@ def test_mac_pseudonymized_stable_and_oui_kept():
 
 
 def test_disabled_rule_leaves_value():
-    text, _ = redact.redact_text("wpa_passphrase=correct-horse-battery-staple\n", disabled=frozenset({"wifi-psk"}))
+    text, _ = redact.redact_text("wpa_passphrase=correct-horse-battery-staple\n", disabled=frozenset({"wifi-psk", "labelled-secret"}))
     assert "correct-horse-battery-staple" in text
 
 

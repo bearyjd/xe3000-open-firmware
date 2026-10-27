@@ -12,7 +12,9 @@ mkdir -p "$ROOT/harvest/redacted" "$ROOT/unpacked" "$ROOT/cache/preflight" "$ROO
          "$ROOT/findings/raw"
 envf="$(mktemp)"
 trap 'rm -f "$envf"' EXIT
-grep -E '^(ANTHROPIC_API_KEY|LLM_MODEL|LLM_MODEL_CHEAP)=' "$ROOT/.env" > "$envf" || true
+trap 'rm -f "$envf"; exit 130' INT
+trap 'rm -f "$envf"; exit 143' TERM
+grep -E '^(ANTHROPIC_API_KEY|LLM_MODEL|LLM_MODEL_CHEAP)=' "$ROOT/.env" 2>/dev/null > "$envf" || true
 # shellcheck disable=SC2086  # PODMAN and HARDENING are intentionally word-split
 $PODMAN run --rm $HARDENING --env-file "$envf" \
   -v "$ROOT/scripts:/work/scripts:ro,z" -v "$ROOT/containers:/work/containers:ro,z" \

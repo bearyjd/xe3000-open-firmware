@@ -92,12 +92,6 @@ regex = '''\b(sk-[A-Za-z0-9_-]{20,})'''
 secretGroup = 1
 
 [[rules]]
-id = "labeled-secret"
-description = "Long token-like value after a token/secret/key/sid/cookie label"
-regex = '''(?i)\b\w*(?:token|secret|key|sid|cookie)\w*[ \t]*[:=][ \t]*['"]?([A-Za-z0-9+/_=-]{4,})'''
-secretGroup = 1
-
-[[rules]]
 id = "json-secret-value"
 description = "JSON string value under a secret-looking key"
 regex = '''(?i)"[^"\n]*(?:pass|psk|token|secret|sid|hash|key|auth|cert|username)[^"\n]*"\s*:\s*"([^"<\n][^"\n]*)"'''
@@ -139,4 +133,22 @@ id = "generic-assigned-entropy"
 description = "High-entropy value of 24+ characters after = or :"
 regex = '''(?m)[=:][ \t]*([A-Za-z0-9+_=\-]{24,})(?:[ \t]|$)'''
 entropy = 4.0
+secretGroup = 1
+
+[[rules]]
+id = "assign-labelled-secret"
+description = "NAME=value or NAME: value where NAME ENDS in a secret word (value taken whole, quoted or not)"
+regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:key|psk|passwd|password|passphrase|secret|token|hash|auth|cookie)|(?:[A-Za-z0-9_.\-]*[_.\-])?(?:pass|sid|pin|puk))[0-9]*[ \t]*[=:][ \t]*("[^"\n<]+"|'[^'\n<]+'|[^\s"'<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "authorization-header"
+description = "Authorization header credential (any scheme)"
+regex = '''(?im)\bauthorization[ \t]*[:=][ \t]*[A-Za-z][\w-]*[ \t]+([^\s<]\S{5,})'''
+secretGroup = 1
+
+[[rules]]
+id = "authorization-header-single"
+description = "Authorization header carrying a bare credential (no scheme) to end of line"
+regex = '''(?im)\bauthorization[ \t]*[:=][ \t]*([^\s<]\S{5,})[ \t]*$'''
 secretGroup = 1

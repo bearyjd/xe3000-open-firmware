@@ -24,7 +24,7 @@ CLAIM_RPC_BACKTICK_RE = re.compile(r"`([a-z][\w-]*\.[a-z][\w]*)`")
 # After "RPC/ubus method": a quoted/backticked name, or a bare name that is clearly an identifier (has . _ or a
 # digit). A plain word such as "for" or "that" is prose, not a method.
 CLAIM_RPC_PHRASE_RE = re.compile(
-    r"\b(?:rpc|ubus)\s+method\s+(?:[`\"']([A-Za-z_][\w.]*)[`\"']|([A-Za-z][A-Za-z]*[._0-9][\w.]*))", re.IGNORECASE)
+    r"\b(?:rpc|ubus)\s+method\s+(?:[`\"']([A-Za-z_][\w.]*)[`\"']|([A-Za-z][A-Za-z]*(?:[._]\w|\d)[\w.]*))", re.IGNORECASE)
 FILE_EXTENSIONS = frozenset({"sh", "conf", "ko", "json", "lua", "txt", "so", "dts", "dtb", "dtsi", "cfg", "ini",
                              "log", "py", "js", "html", "xml", "yaml", "yml", "bin", "img", "pem", "key", "sock"})
 PROSE_STOPWORDS = frozenset({"with", "the", "a", "an", "to", "for", "and", "or", "in", "on", "of", "it", "is",
@@ -85,7 +85,7 @@ def mentions(claim: str) -> GroundTruth:
     modules = _modules(claim, lsmod=False) | {_module_name(m.group(1)) for m in CLAIM_MODULE_RE.finditer(claim)}
     rpc = set(_rpc(claim))
     rpc |= {m.group(1) for m in CLAIM_RPC_BACKTICK_RE.finditer(claim) if m.group(1).rsplit(".", 1)[1] not in FILE_EXTENSIONS}
-    rpc |= {m.group(1) or m.group(2) for m in CLAIM_RPC_PHRASE_RE.finditer(claim)}
+    rpc |= {(m.group(1) or m.group(2)).rstrip(".") for m in CLAIM_RPC_PHRASE_RE.finditer(claim)}
     return GroundTruth(_at(claim), frozenset(rpc), _gpios(claim), frozenset(modules - {"ko"}))
 
 
