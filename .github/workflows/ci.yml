@@ -34,6 +34,8 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck scripts/*.sh hooks/pre-commit
+          shellcheck -s bash recipe/prepare.sh recipe/container-build.sh recipe/lib.sh
+          shellcheck -s sh recipe/files/usr/sbin/xe3000-sim-select recipe/files/etc/uci-defaults/90-xe3000-defaults
           if [ -f scripts/remote/collect.sh ]; then
             shellcheck -s sh scripts/remote/collect.sh
           fi

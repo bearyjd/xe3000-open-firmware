@@ -32,6 +32,8 @@ Phase 0 — scaffold and LLM-assisted recon engine, built and tested on syntheti
 | `containers/` | Podman build/analysis image, pinned gitleaks image digest, independent `gitleaks.toml` |
 | `tests/` | Offline pytest suite (FakeClient, runtime-generated fixtures) |
 | `justfile` | `build`, `test`, `preflight`, `redact`, `redact-unpacked`, `analyze`, `dry-run` (`PODMAN` env selects the podman command) |
+| `recipe/` | Build recipe: pinned tag (`pins.env`), `prepare.sh`, kernel and tree patches, config seed, files overlay, build container |
+| `docs/runbooks/` | Flash and rollback runbook (document only, not executed) |
 | `hooks/` | Git hooks (`scripts/install-hooks.sh` enables them) |
 
 ## Setup
@@ -55,4 +57,4 @@ Canary values must be at least 6 characters, so 4-digit SIM PINs cannot be canar
 2. **Phase 1** — live read-only harvest, redaction, secrets pre-flight.
 3. **Phase 2** — static analysis of the stock image (AT commands, GL RPC map, modem boot flow).
 4. **Phase 3** — gap analysis against upstream OpenWrt 25.12.x.
-5. Later: build recipe (pinned tag, `prepare.sh`, MHI patch, `pcie_port_pm=off`, XE3000 `gl-puli-mcu`, SIM-select script, uci-defaults); podman build container + CI; flash/rollback runbook (stock U-Boot web recovery, back up eMMC first, bootloader untouched); parental-control integration (nftables sets, rpcd ACL user for the access-control app and Vigie).
+5. Build recipe skeleton is in `recipe/` (unverified on hardware, no image built); flash/rollback runbook is in `docs/runbooks/`. Later: full image build in CI; parental-control integration (nftables sets, rpcd ACL user for the access-control app and Vigie).

@@ -1,0 +1,20 @@
+From: xe3000-open-firmware <noreply@example.invalid>
+Subject: [PATCH] mediatek: gl-xe3000: add pcie_port_pm=off to kernel cmdline
+
+Disable PCIe port power management for the XE3000 and X3000 boards so the
+PCIe modem is not put into a link state it cannot leave. Applied to the
+OpenWrt tree (not the kernel) by recipe/prepare.sh.
+
+Signed-off-by: xe3000-open-firmware <noreply@example.invalid>
+---
+--- a/target/linux/mediatek/dts/mt7981a-glinet-gl-x3000-xe3000-common.dtsi
++++ b/target/linux/mediatek/dts/mt7981a-glinet-gl-x3000-xe3000-common.dtsi
+@@ -8,7 +8,7 @@
+ 
+ / {
+ 	chosen {
+-		bootargs = "console=ttyS0,115200n8 root=PARTLABEL=rootfs rootwait";
++		bootargs = "console=ttyS0,115200n8 root=PARTLABEL=rootfs rootwait pcie_port_pm=off";
+ 	};
+ 
+ 	aliases {

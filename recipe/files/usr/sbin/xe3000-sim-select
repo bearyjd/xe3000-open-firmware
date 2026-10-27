@@ -1,0 +1,22 @@
+#!/bin/sh
+# Print the AT command sequence that would select a SIM slot on the XE3000 modem.
+# This helper only PRINTS. It never opens a modem port and never sends anything.
+# The sequence is a Quectel-style PLACEHOLDER until the stock-firmware analysis confirms it.
+set -eu
+
+usage() {
+	echo "usage: xe3000-sim-select 1|2   (prints AT commands; sends nothing)" >&2
+	exit 2
+}
+
+[ "$#" -eq 1 ] || usage
+case "$1" in
+1 | 2) slot="$1" ;;
+*) usage ;;
+esac
+
+echo "# NOT SENT: review these commands, then send them yourself on a modem you own."
+echo "AT+QUIMSLOT?"
+echo "AT+QUIMSLOT=${slot}"
+echo "AT+CFUN=0"
+echo "AT+CFUN=1"
