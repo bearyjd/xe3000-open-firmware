@@ -195,10 +195,13 @@ modem_owners() {
 # pid + process name only (/proc/<pid>/comm). Command lines (/proc/<pid>/cmdline, ps w) are never collected:
 # they carry passwords (pppd, curl -u, mosquitto_pub -P).
 proc_comm_table() {
-  for pt_d in /proc/[0-9]*; do
-    pt_p=${pt_d#/proc/}
+  pt_root=${PROC_ROOT:-/proc}
+  for pt_d in "$pt_root"/[0-9]*; do
+    pt_p=${pt_d#"$pt_root"/}
     pt_c=
-    { read -r pt_c < "/proc/$pt_p/comm"; } 2>/dev/null
+    { read -r pt_c < "$pt_root/$pt_p/comm"; } 2>/dev/null || continue
+    # process exited between the glob and the read (or empty name): never print a pid without a name
+    [ -n "$pt_c" ] || continue
     printf '%s %s\n' "$pt_p" "$pt_c"
   done
   return 0
