@@ -406,3 +406,25 @@ def test_runbook_covers_recovery_backup_and_is_document_only():
     assert "not been executed" in low
     assert not re.search(r"\bof=/dev/", text)
     assert "fw_setenv" not in text.replace("Never run `fw_setenv`", "")
+
+
+def _backup_section():
+    text = RUNBOOK.read_text()
+    start = text.index("## 2.")
+    return text[start:text.index("## 3.")]
+
+
+def test_runbook_backup_checks_pipeline_status_not_just_checksums():
+    sec = _backup_section().lower()
+    assert "pipefail" in sec or "pipestatus" in sec
+
+
+def test_runbook_backup_verifies_byte_count_against_device_size():
+    sec = _backup_section().lower()
+    assert "byte count" in sec or "wc -c" in sec
+    assert "blockdev --getsize64" in sec or "/sys/class/block" in sec
+
+
+def test_runbook_backup_does_not_trust_matching_checksums_alone():
+    sec = _backup_section().lower()
+    assert "truncated" in sec
