@@ -9,6 +9,9 @@
 #   scripts/harvest.sh [--probe | --with-logs] --dry-print
 #       print the exact remote command and the exact remote script; does NOT connect
 #
+# HARVEST_OUT may only relocate output INSIDE <repo>/harvest/raw (gitignored raw zone): it is resolved with
+# realpath -m (.. and symlinks followed) and refused unless it is that directory or below it. Raw data holds
+# credentials, so it never goes to synced or tracked directories.
 # HARVEST_TIMEOUT (seconds, default 600) bounds the whole ssh session. Prints only counts and paths.
 # Nothing but `sh -s glinet-harvest-collect ...` ever runs on the router. A stuck run can be stopped with
 #   ssh root@$ROUTER_HOST "pkill -f '[s]h -s glinet-harvest-collect'"
@@ -19,7 +22,9 @@ export LC_ALL=C
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 COLLECT="$HERE/remote/collect.sh"
-OUT_BASE=${HARVEST_OUT:-$HERE/../harvest/raw}
+REPO_ROOT=$(cd "$HERE/.." && pwd -P)
+RAW_ROOT="$REPO_ROOT/harvest/raw"
+OUT_BASE=${HARVEST_OUT:-$RAW_ROOT}
 TAG=glinet-harvest-collect
 
 NAME_RE='^[A-Za-z0-9._@:+=,#-]+(/[A-Za-z0-9._@:+=,#-]+)*$'
@@ -39,6 +44,17 @@ usage() {
 }
 
 die() { printf 'harvest: %s\n' "$*" >&2; exit 1; }
+
+# Resolve OUT_BASE (no symlink/.. escape) and require it to be harvest/raw or below. Also guards a symlinked raw root.
+confine_out() {
+  command -v realpath >/dev/null 2>&1 || die "the 'realpath' command (coreutils) is required"
+  local resolved
+  resolved=$(realpath -m -- "$OUT_BASE") || die "HARVEST_OUT cannot be resolved"
+  if [[ $resolved != "$RAW_ROOT" && $resolved != "$RAW_ROOT"/* ]]; then
+    die "HARVEST_OUT must resolve to a directory under $RAW_ROOT (raw data may not leave harvest/raw)"
+  fi
+  OUT_BASE=$resolved
+}
 
 # Make untrusted text safe for the manifest/terminal: printable ASCII only, bounded.
 clean() {
@@ -172,6 +188,7 @@ main() {
   local ts suffix="" dir frames manifest stream ssh_rc=0
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   if ((probe)); then suffix=-probe; fi
+  confine_out
   mkdir -p "$OUT_BASE"
   chmod 0700 "$OUT_BASE"
   dir="$OUT_BASE/$ts$suffix"
