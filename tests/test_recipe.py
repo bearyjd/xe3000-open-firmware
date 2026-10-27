@@ -428,3 +428,107 @@ def test_runbook_backup_verifies_byte_count_against_device_size():
 def test_runbook_backup_does_not_trust_matching_checksums_alone():
     sec = _backup_section().lower()
     assert "truncated" in sec
+
+
+# ---- overlay hygiene: nothing secret-bearing or untracked may enter the build ----------------------------------
+
+def _recipe_copy(tmp_path):
+    root = tmp_path / "repocopy"
+    shutil.copytree(RECIPE, root / "recipe", ignore=shutil.ignore_patterns("__pycache__"))
+    return root
+
+
+def _prepare_copy(root, tmp_path, upstream_repo, commit):
+    env = {**os.environ, "BUILD_DIR": str(tmp_path / "build"), "OPENWRT_REPO": str(upstream_repo),
+           "OPENWRT_TAG": "v25.12.99", "OPENWRT_COMMIT": commit, "GIT_CONFIG_GLOBAL": "/dev/null"}
+    return subprocess.run(["bash", str(root / "recipe" / "prepare.sh")], env=env, capture_output=True, text=True,
+                          timeout=120)
+
+
+def _plant(root, rel, content="x\n"):
+    path = root / "recipe" / "files" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
+SECRET_NAMES = [".env", ".env.local", "etc/dropbear/dropbear_rsa_host_key", "etc/shadow", "root/.ssh/id_ed25519",
+                "etc/ssl/private/site.pem", "etc/ssl/site.key", "etc/config/vpn.p12", "etc/wireguard/wg0.conf.secret"]
+
+
+@pytest.mark.parametrize("rel", SECRET_NAMES)
+def test_prepare_refuses_secret_named_overlay_files(tmp_path, upstream, rel):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _plant(root, rel)
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0, r.stdout
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert "overlay" in r.stderr.lower()
+
+
+def test_prepare_refuses_private_key_content_in_any_overlay_file(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    marker = "-----BEGIN " + "OPENSSH PRIVATE" + " KEY-----"
+    _plant(root, "etc/config/innocent", marker + "\n")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert "overlay" in r.stderr.lower()
+
+
+def test_prepare_refuses_symlinks_in_overlay(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    link = root / "recipe" / "files" / "etc" / "leak"
+    link.symlink_to("/etc/hostname")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0
+    assert not (tmp_path / "build" / "openwrt").exists()
+
+
+def test_prepare_refuses_untracked_overlay_files_in_a_git_checkout(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "tracked")
+    _plant(root, "etc/config/untracked-extra", "harmless\n")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode != 0
+    assert not (tmp_path / "build" / "openwrt").exists()
+    assert "untracked" in r.stderr.lower()
+
+
+def test_prepare_copies_clean_tracked_overlay_in_a_git_checkout(tmp_path, upstream):
+    repo, commit = upstream
+    root = _recipe_copy(tmp_path)
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "tracked")
+    r = _prepare_copy(root, tmp_path, repo, commit)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "build" / "openwrt" / "files" / "usr/sbin/xe3000-sim-select").is_file()
+
+
+# ---- runbook honesty about recovery ----------------------------------------------------------------------------
+
+def test_runbook_does_not_promise_guaranteed_recovery():
+    low = RUNBOOK.read_text().lower()
+    assert "always available" not in low
+    assert "is always" not in low
+
+
+def test_runbook_states_documented_uboot_defect_and_cites_upstream():
+    text = RUNBOOK.read_text()
+    low = text.lower()
+    assert "defect" in low and "mt2500" in low
+    assert "no guarantee" in low or "cannot be guaranteed" in low or "may not" in low
+    assert re.search(r"https://openwrt\.org/toh/\S+", text)
+
+
+def test_runbook_requires_verified_full_backup_before_any_flash():
+    low = RUNBOOK.read_text().lower()
+    assert "full emmc" in low or "full mtd" in low
+    assert re.search(r"(do not|never) flash[^.\n]*(until|without)[^.\n]*(verified|backup)", low)
