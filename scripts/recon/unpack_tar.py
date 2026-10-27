@@ -45,6 +45,11 @@ def _escapes(parent_rel: str, target: str) -> bool:
     return joined == ".." or joined.startswith("../")
 
 
+def _resolves_inside(root: Path, link: Path) -> bool:
+    """True if `link` (fully resolved through every hop) stays inside `root`."""
+    return Path(os.path.realpath(link)).is_relative_to(root)
+
+
 def _parent_chain_ok(root: Path, rel: str) -> str | None:
     """None if every existing parent of `rel` is a real directory; otherwise the skip reason."""
     cur = root
@@ -85,8 +90,12 @@ def _extract_one(tf: tarfile.TarFile, member: tarfile.TarInfo, root: Path) -> di
     target = root / rel
     parent_rel = posixpath.dirname(rel)
     if member.isdir():
+        if os.path.islink(target):
+            return _row(rel, "skipped", "symlink-conflict")
         target.mkdir(parents=True, exist_ok=True)
-        target.chmod(0o755)
+        if os.path.islink(target) or not target.is_dir():
+            return _row(rel, "skipped", "conflict")
+        os.chmod(target, 0o755)
         return _row(rel, "extracted")
     if member.issym():
         if member.linkname.startswith("/"):
@@ -99,6 +108,9 @@ def _extract_one(tf: tarfile.TarFile, member: tarfile.TarInfo, root: Path) -> di
         target.parent.mkdir(parents=True, exist_ok=True)
         _replace_slot(target)
         os.symlink(member.linkname, target)
+        if not _resolves_inside(root, target):
+            target.unlink()
+            return _row(rel, "skipped", "symlink-escape")
         return _row(rel, "extracted")
     if member.islnk():
         link = _norm_member(member.linkname)
@@ -155,6 +167,7 @@ def sanitize_tree(root: Path) -> list[dict]:
     """Walk an extracted tree without following links: drop escaping symlinks and special files, strip setuid,
     make everything traversable. Returns rows {path, action, reason}."""
     root = Path(root)
+    real_root = root.resolve()
     rows: list[dict] = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         here = Path(dirpath)
@@ -170,7 +183,7 @@ def sanitize_tree(root: Path) -> list[dict]:
                 target = os.readlink(path)
                 if target.startswith("/"):
                     rows.append(_row(rel, "recorded", "symlink-absolute"))
-                elif _escapes(rel_dir, target):
+                elif _escapes(rel_dir, target) or not _resolves_inside(real_root, path):
                     path.unlink()
                     rows.append(_row(rel, "removed", "symlink-escape"))
             elif stat.S_ISREG(mode):
