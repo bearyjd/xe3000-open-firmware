@@ -110,3 +110,14 @@ def test_justfile_mounts_github_dir_for_the_suite():
 def test_container_has_pyyaml_pinned():
     text = (REPO / "containers" / "recon.Containerfile").read_text()
     assert re.search(r"pyyaml==\d+\.\d+\.\d+", text, re.I)
+
+
+def test_scripts_avoid_and_or_chains():
+    """SC2015: `A && B || C` is not if-then-else; CI's shellcheck rejects it. Guard it without needing shellcheck."""
+    pattern = re.compile(r"&&[^#\n]*\|\|")
+    offenders = []
+    for path in sorted((REPO / "scripts").glob("*.sh")) + [REPO / "hooks" / "pre-commit"]:
+        for no, line in enumerate(path.read_text().splitlines(), 1):
+            if pattern.search(line):
+                offenders.append(f"{path.relative_to(REPO)}:{no}")
+    assert not offenders, f"A && B || C chains (SC2015): {offenders}"
