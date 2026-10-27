@@ -74,3 +74,38 @@ def test_pinned_gitleaks_default_rules_find_nothing_in_tests():
                          capture_output=True, text=True, timeout=300)
     hits = re.findall(r"^File:\s+(\S+)\nLine:\s+(\d+)", res.stdout + res.stderr, re.M)
     assert res.returncode == 0, f"gitleaks flagged tests/: {hits}"
+
+
+def test_snapshot_contains_only_tracked_python_sources(tmp_path):
+    """The gitleaks target is a copy of the test sources only: bytecode caches fold string constants
+    (``"tok" + "en = ..."`` becomes one literal in the .pyc) and must never be scanned."""
+    cache = TESTS / "__pycache__"
+    stray = cache / "zz_hygiene_probe.cpython-0.pyc"
+    try:
+        cache.mkdir(exist_ok=True)
+        stray.write_bytes(b"\x00folded")
+    except OSError:
+        pytest.skip("tests/ is read-only")
+    try:
+        dest = snapshot_sources(tmp_path / "snap")
+    finally:
+        stray.unlink(missing_ok=True)
+    names = sorted(p.name for p in dest.rglob("*") if p.is_file())
+    assert names and all(n.endswith(".py") for n in names), names
+    assert "test_fixture_hygiene.py" in names
+
+
+@pytest.mark.requires_gitleaks
+def test_gitleaks_scan_ignores_compiled_bytecode():
+    """Regression: a freshly written .pyc of this very file must not trip the pinned gitleaks scan."""
+    import py_compile
+    cfile = TESTS / "__pycache__" / "zz_hygiene_regression.cpython-0.pyc"
+    try:
+        cfile.parent.mkdir(exist_ok=True)
+        py_compile.compile(__file__, cfile=str(cfile), doraise=True)
+    except OSError:
+        pytest.skip("tests/ is read-only")
+    try:
+        test_pinned_gitleaks_default_rules_find_nothing_in_tests()
+    finally:
+        cfile.unlink(missing_ok=True)
