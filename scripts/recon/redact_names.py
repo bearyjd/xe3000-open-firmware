@@ -9,7 +9,8 @@ _PLACEHOLDER_RE = re.compile(r"""\s*["']?<REDACTED:[\w-]+>["']?\s*""")
 # redacted earlier in the same run, so it is left alone; an unknown tag followed by text is not trusted.
 KNOWN_TAGS = ("pem-block", "json-secret", "auth-header", "wifi-psk", "wg-key", "uci-sensitive", "url-userinfo",
               "cli-secret", "yaml-block", "labelled-secret", "at-secret", "markup-secret", "wpa-psk-line",
-              "ipsec-secret", "ppp-secret", "pw-hash", "imei", "imsi", "iccid", "token", "hex-psk", "b64-blob", "eui64")
+              "ipsec-secret", "ppp-secret", "pw-hash", "imei", "imsi", "iccid", "token", "hex-psk", "b64-blob", "eui64",
+              "serial", "entropy-word", "url-query")
 STARTS_WITH_PLACEHOLDER = re.compile(r"""["']?<REDACTED:(?:%s)>["']?(?:\s|$)""" % "|".join(KNOWN_TAGS))
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
@@ -17,7 +18,11 @@ _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 EXACT = frozenset({"pass", "pw", "pwd", "sid", "pin", "puk", "pincode", "private", "cert", "username", "auth",
                    "cred", "credential", "credentials", "key"})
 JSON_EXACT = frozenset({"session", "sessionid", "keys", "secrets", "tokens", "passwords", "hashes", "sids", "creds"})
-TAILS = ("passwd", "password", "passphrase", "secret", "token", "psk", "hash", "cookie")
+TAILS = ("passwd", "password", "passphrase", "secret", "token", "psk", "hash", "cookie", "bindcode", "passcode",
+         "authcode", "pairingcode")
+# A name whose FIRST token is one of these is secret too (secret_blob, psk_hex, key_material, password_hash).
+FIRST_SECRET = frozenset({"secret", "psk", "key", "password", "passwd", "passphrase", "token", "pass", "pwd", "pw",
+                          "cred", "credential", "credentials"})
 KEY_PREFIXES = ("api", "wep", "auth", "ssh", "enc", "private", "secret", "master", "shared", "session", "license",
                 "access", "psk", "pre", "wpa", "tls", "aes", "priv", "sae", "vpn", "ftp", "app", "crypt", "sign")
 VALUE_WORDS = frozenset({"value", "data", "str", "string", "text", "new", "old", "current"})
@@ -31,7 +36,8 @@ _ENUM = frozenset({"true", "false", "yes", "no", "on", "off", "present", "absent
                    "crc32c", "crc32", "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "eap", "sae", "psk",
                    "wpa", "open", "set", "unset", "auto", "default", "(hidden)", "(null)", "***", "required",
                    "invalid", "empty", "missing", "strict", "relaxed", "loose", "medium", "low", "high",
-                   "complex", "simple", "basic", "legacy", "any", "all"})
+                   "complex", "simple", "basic", "legacy", "any", "all", "chap", "pap", "mschap", "mschapv2", "chap-md5",
+                   "rsa", "ec", "ecdsa", "ed25519", "aes", "aes128", "aes256"})
 _WPA = re.compile(r"(?:wpa\d?|sae|psk\d?|eap|owe|ccmp|tkip|none|open|ft|sha\d+)(?:[-+_ /]\w+)*", re.IGNORECASE)
 _KEY_TOKEN = re.compile(rf"(?:{'|'.join(KEY_PREFIXES)})key")
 
@@ -70,7 +76,7 @@ def classify(name: str, json_mode: bool = False) -> str | None:
         toks.pop()
     if not toks:
         return None
-    weak = False
+    weak, full = False, list(toks)
     if toks[-1] in WEAK_LAST and len(toks) > 1:
         toks, weak = toks[:-1], True
     if len(toks) > 1 and toks[-2] in PUBLIC:
@@ -79,6 +85,8 @@ def classify(name: str, json_mode: bool = False) -> str | None:
     joined = toks[-2] + last if len(toks) > 1 else ""
     if _secret_token(last, json_mode) or (joined and _secret_token(joined, json_mode)):
         return "weak" if weak else "strong"
+    if len(full) > 1 and full[0] in FIRST_SECRET:
+        return "weak" if full[-1] in WEAK_LAST else "strong"
     return None
 
 

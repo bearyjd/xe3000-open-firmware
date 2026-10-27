@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import os
 import stat
 import sys
@@ -17,7 +18,7 @@ from pathlib import Path
 
 CANARY_ENV = "RECON_CANARY_FILE"
 DEFAULT_REL = Path(".config") / "xe3000-open-firmware" / "canaries"
-MIN_CANARY_LEN = 6
+MIN_CANARY_LEN = 6  # shorter values (4-digit PINs) would match everywhere; they cannot be canaried
 REAL_MARKER_NAMES = (".recon-redacted", "etc/glversion", "etc/openwrt_release")
 INIT_TEXT = ("# One secret per line (Wi-Fi key, admin password, PPPoE password, ...). Lines starting with # are ignored.\n"
              "# This file must stay mode 0600. Values are never printed or logged; hits report file and line only.\n")
@@ -83,7 +84,10 @@ def _b64_fragments(data: bytes) -> set[str]:
 def variants(secret: str) -> tuple[frozenset[str], frozenset[str]]:
     """(case-insensitive variants, lowercase-compared; case-sensitive variants)."""
     data = secret.encode()
-    insensitive = {secret, urllib.parse.quote(secret, safe=""), urllib.parse.quote_plus(secret), data.hex()}
+    insensitive = {secret, urllib.parse.quote(secret, safe=""), urllib.parse.quote_plus(secret), data.hex(),
+                   "".join(f"%{b:02x}" for b in data),               # every byte percent-encoded (%57)
+                   json.dumps(secret)[1:-1],                         # "\"-style JSON escaping
+                   "".join(f"\\u{ord(ch):04x}" for ch in secret)}      # \uXXXX for every character
     sensitive = _b64_fragments(data)
     urlsafe = base64.urlsafe_b64encode(data).decode().rstrip("=")
     if len(urlsafe) - 2 >= MIN_CANARY_LEN:

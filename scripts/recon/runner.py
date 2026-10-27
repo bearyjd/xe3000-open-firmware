@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from recon import allowlist, canary, chunking, cost, groundtruth, preflight, prompts, schema
+from recon import allowlist, canary, chunking, cost, groundtruth, paths, preflight, prompts, schema
 from recon.cache import Cache, cache_key
 from recon.chunking import Chunk
 from recon.client import ModelResponse
@@ -348,6 +348,8 @@ def _load_inputs(cfg: RunConfig, out):
         raise RunRefused("no valid pre-flight stamp for the current input tree and gitleaks setup; "
                          "run `just preflight` first")
     files, skipped, denied, texts = _classify_inputs(groups, _patterns(cfg, out))
+    links = [n for d in cfg.inputs if Path(d).exists() for n in paths.list_symlinks(d, cfg.root)]
+    skipped = [*skipped, *({"name": n, "reason": "symlink"} for n in links)]
     if not texts:
         out(f"no allowlisted files to send ({len(denied)} denied); nothing will be sent")
     return digest, files, skipped, denied, texts

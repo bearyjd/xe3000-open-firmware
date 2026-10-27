@@ -7,8 +7,11 @@ title = "xe3000-open-firmware recon pre-flight"
 [[rules]]
 id = "uci-secret-option"
 description = "UCI option/list whose name suggests a secret, with a non-redacted value"
-regex = '''(?im)^[ \t]*(?:option|list)[ \t]+\S*(?:key|psk|pass|passwd|password|secret|token|private|auth|sid|hash|cert|username)\S*[ \t]+['"]?([^\s'"<]\S*)'''
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:\S*(?:key|psk|pass|passwd|password|secret|token|private|auth|hash|cert|username|bind_?code|auth_?code|pair\w*code|activation_?code)\S*|(?:\S*[_.\-])?sid)[ \t]+['"]?([^\s'"<]\S*)'''
 secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^(\d{1,2}|true|false|yes|no|on|off|none|present|absent|chap|pap|mschap\w*|eap|sae|rsa|ec|ecdsa|ed25519|aes\d*|strict|relaxed|wpa[\w+-]*|sha\d+|md5|crc32c?|(/[^\s/]+)+)['"]?$''']
 
 [[rules]]
 id = "wifi-psk-line"
@@ -70,13 +73,13 @@ secretGroup = 1
 [[rules]]
 id = "iccid"
 description = "SIM ICCID: 89 plus 17-18 digits"
-regex = '''(?:^|[^0-9A-Za-z])(89\d{17,18})(?:[^0-9A-Za-z]|$)'''
+regex = '''(?:^|[^0-9A-Za-z])(89\d{17,18}F?)(?:[^0-9A-Za-z]|$)'''
 secretGroup = 1
 
 [[rules]]
 id = "iccid-label"
 description = "Value after an ICCID label"
-regex = '''(?i)\biccid\b[\s:='"]{0,6}(\d{10,22})'''
+regex = '''(?i)\biccid\b[\s:='"]{0,6}(\d{10,22}f?)'''
 secretGroup = 1
 
 [[rules]]
@@ -127,25 +130,25 @@ secretGroup = 1
 [[rules]]
 id = "generic-quoted-entropy"
 description = "High-entropy quoted string of 20+ characters (catches formats no rule knows)"
-regex = '''['"]([A-Za-z0-9+_=\-]{20,})['"]'''
+regex = '''['"]([A-Za-z0-9+/_=\-]{20,})['"]'''
 entropy = 3.5
 secretGroup = 1
 
 [[rules]]
 id = "generic-assigned-entropy"
 description = "High-entropy value of 24+ characters after = or :"
-regex = '''(?m)[=:][ \t]*([A-Za-z0-9+_=\-]{24,})(?:[ \t]|$)'''
+regex = '''(?m)[=:][ \t]*([A-Za-z0-9+/_=\-]{24,})(?:[ \t]|$)'''
 entropy = 4.0
 secretGroup = 1
 
 [[rules]]
 id = "assign-labelled-secret"
 description = "NAME=value, NAME: value, NAME => value, NAME:: value or NAME<TAB>value where NAME ENDS in a secret word"
-regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:key|psk|passwd|password|passphrase|secret|token|hash|auth|cookie|pwd|cred)|(?:[A-Za-z0-9_.\-]*[_.\-])?(?:pass|sid|pin|puk))[0-9]*(?:[ \t]*(?:=>|::|[=:：])[ \t]*|\t+)("[^"\n<]+"|'[^'\n<]+'|[^\s"'<=:>|]\S*)'''
+regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:key|psk|passwd|password|passphrase|secret|token|hash|auth|cookie|pwd|cred)|(?:[A-Za-z0-9_.\-]*[_.\-])?(?:pass|sid|pin|puk)|(?:key|secret|psk|password|passwd|passphrase|token|pass|pwd)[_.\-][A-Za-z0-9_.\-]*)[0-9]*(?:[ \t]*(?:=>|::|[=:：])[ \t]*|\t+)("[^"\n<]+"|'[^'\n<]+'|[^\s"'<=:>|]\S*)'''
 secretGroup = 1
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''(?i)^["']?(\d{1,2}|true|false|yes|no|on|off|none|null|present|absent|string|integer|boolean|number|object|array|double|crc32c?|md5|sha\d+|eap|sae|strict|relaxed|(/[^\s/]+)+)["']?$''']
+regexes = ['''(?i)^["']?(\d{1,2}|true|false|yes|no|on|off|none|null|present|absent|string|integer|boolean|number|object|array|double|crc32c?|md5|sha\d+|eap|sae|strict|relaxed|rsa|ec|ecdsa|ed25519|aes\d*|chap|pap|mschap\w*|wpa[\w+-]*|(/[^\s/]+)+)["']?$''']
 
 [[rules]]
 id = "authorization-header"
@@ -241,4 +244,73 @@ secretGroup = 1
 id = "inline-key-block"
 description = "OpenVPN-style inline secret/key block"
 regex = '''(?is)<(?:secret|tls-auth|tls-crypt|tls-crypt-v2|auth-user-pass|key|pkcs12)>\s*([^<\s][^<]{15,}?)\s*</'''
+secretGroup = 1
+
+[[rules]]
+id = "bare-keyword-line"
+description = "password/passwd/passphrase/psk/secret/token followed by a space and a value, no separator"
+regex = '''(?im)^[ \t]*(?:password|passwd|passphrase|psk|secret|token)[ \t]+([^\s<-][^\n]*?)[ \t]*$'''
+secretGroup = 1
+
+[[rules]]
+id = "jshn-add-secret"
+description = "json_add_string/int NAME VALUE with a secret-looking NAME"
+regex = '''(?i)\bjson_add_(?:string|int|boolean)[ \t]+\S*(?:pass|psk|key|secret|token|pin|puk)\S*[ \t]+("[^"\n<]*"|[^\s<"]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^["']?(\d{1,2}|true|false|none|wpa[\w+-]*|sae|eap|rsa|sha\d+|chap|pap)["']?$''']
+
+[[rules]]
+id = "uci-set-function-secret"
+description = "uci_set CONFIG SECTION OPTION VALUE with a secret-looking OPTION"
+regex = '''(?i)\buci_set[ \t]+\S+[ \t]+\S+[ \t]+\S*(?:pass|psk|key|secret|token|pin|puk)\S*[ \t]+("[^"\n<]*"|[^\s<"]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "secret"
+regexes = ['''(?i)^["']?(\d{1,2}|true|false|none|wpa[\w+-]*|sae|eap|rsa|sha\d+|chap|pap)["']?$''']
+
+[[rules]]
+id = "lua-uci-set-secret"
+description = "uci:set(config, section, option, value) with a secret-looking option"
+regex = '''(?i):set\(\s*"[^"]*"\s*,\s*"[^"]*"\s*,\s*"[^"]*(?:pass|psk|key|secret|token|pin|puk|bindcode|bind_code)[^"]*"\s*,\s*"([^"<]+)"'''
+secretGroup = 1
+
+[[rules]]
+id = "echo-entropy-word"
+description = "High-entropy word passed to echo/printf"
+regex = '''(?m)\b(?:echo|printf)\b[^\n]*?(?:^|[\s'"|=])([A-Za-z0-9+_=\-][A-Za-z0-9+/_=.\-]{19,})(?:[\s'";>|]|$)'''
+entropy = 3.5
+secretGroup = 1
+
+[[rules]]
+id = "lone-entropy-line"
+description = "A line that is one high-entropy word (heredoc body, token file)"
+regex = '''(?m)^[ \t]*([A-Za-z0-9+_=\-][A-Za-z0-9+/_=.\-]{19,})[ \t]*$'''
+entropy = 4.0
+secretGroup = 1
+
+[[rules]]
+id = "base64-unpadded"
+description = "Unpadded base64 (also with / and +) of 32+ characters"
+regex = '''(?:^|[^A-Za-z0-9+/=_\-])([A-Za-z0-9+/]{32,})(?:[^A-Za-z0-9+/=_\-]|$)'''
+entropy = 4.3
+secretGroup = 1
+
+[[rules]]
+id = "url-query-code"
+description = "?code= / &bind_code= style pairing codes in URLs"
+regex = '''(?i)[?&](?:code|bind_code|pair_code|activation_code)=([^&\s'"<>]{6,})'''
+secretGroup = 1
+
+[[rules]]
+id = "device-serial-label"
+description = "serialno=/SerialNumber:/serial number: labelled device serials"
+regex = '''(?i)\b(?:androidboot\.serialno|serialno|serial[ _\-]?number|serialnumber)\b[ \t]*[=:][ \t]*([A-Za-z0-9_.\-]{4,})'''
+secretGroup = 1
+
+[[rules]]
+id = "device-serial-plain"
+description = "Serial: followed by an id-like value of 8+ characters"
+regex = '''(?i)\bserial\b[ \t]*:[ \t]*([A-Za-z0-9\-]{8,})\b'''
 secretGroup = 1

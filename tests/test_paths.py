@@ -48,7 +48,8 @@ def test_refuses_symlinked_dir_into_raw(root):
 def test_symlink_within_allowed_is_ok(root):
     (root / "harvest" / "redacted" / "a.txt").write_text("x\n")
     os.symlink(root / "harvest" / "redacted" / "a.txt", root / "harvest" / "redacted" / "b.txt")
-    assert len(paths.list_input_files(root / "harvest" / "redacted", root)) == 2
+    # links are never followed any more: only the real file is listed
+    assert [f.name for f in paths.list_input_files(root / "harvest" / "redacted", root)] == ["redacted/a.txt"]
 
 
 def test_refuses_allowed_root_that_is_symlink_to_raw(tmp_path):

@@ -9,7 +9,7 @@ import json
 import re
 from collections import Counter
 
-from recon.redact_ids import WG_B64, Step, chain, sub_value, sub_whole
+from recon.redact_ids import WG_B64, Step, chain, shannon, sub_value, sub_whole
 from recon.redact_names import classify, is_benign_value, is_placeholder, should_redact, tag
 
 _I = re.IGNORECASE
@@ -178,7 +178,63 @@ def _cli(text: str, counts: Counter) -> str:
         counts["cli-secret"] += 1
         return m.group(1) + tag("cli-secret") + m.group(3) + tag("cli-secret") + m.group(5)
     text = PASSWD_PIPE.sub(pipe, CHPASSWD.sub(chpasswd, CMD_SECRET.sub(cmd, text)))
-    return sub_value(BARE_SECRET, "cli-secret")(text, counts)
+    text = sub_value(BARE_KEYWORD, "cli-secret")(sub_value(BARE_SECRET, "cli-secret")(text, counts), counts)
+    return _named_values(text, counts)
+
+
+BARE_KEYWORD = re.compile(r"^([ \t]*(?:password|passwd|passphrase|psk|secret|token)[ \t]+)(?!-)([^\s<][^\n]*?)[ \t]*$", _M)
+NAMED_VALUE = (
+    re.compile(r"(\bjson_add_(?:string|int|boolean)[ \t]+)(\S+)([ \t]+)(\"[^\"\n]*\"|'[^'\n]*'|\S+)"),
+    re.compile(r"(\buci_set[ \t]+\S+[ \t]+\S+[ \t]+)(\S+)([ \t]+)(\"[^\"\n]*\"|'[^'\n]*'|\S+)"),
+    re.compile(r"(:(?:set|add_list)\(\s*\"[^\"]*\"\s*,\s*\"[^\"]*\"\s*,\s*\")([^\"]+)(\"\s*,\s*)(\"[^\"]*\")"),
+)
+URL_QUERY_CODE = re.compile(r"([?&](?:code|bind_code|pair_code|activation_code)=)([^&\s'\"<>]{6,})")
+WORD = re.compile(r"(?<![A-Za-z0-9+/_=.\-])[A-Za-z0-9+/_=.\-]{20,}(?![A-Za-z0-9+/_=.\-])")
+HEREDOC = re.compile(r"<<-?[ \t]*['\"]?(\w+)['\"]?")
+MIN_WORD_ENTROPY = 3.5
+
+
+def _named_values(text: str, counts: Counter) -> str:
+    def repl(m: re.Match) -> str:
+        if not should_redact(m.group(2).strip("\"'"), m.group(4)):
+            return m.group(0)
+        counts["cli-secret"] += 1
+        return m.group(1) + m.group(2) + m.group(3) + tag("cli-secret")
+    for pattern in NAMED_VALUE:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def _entropy_words(line: str, counts: Counter) -> str:
+    def repl(m: re.Match) -> str:
+        w = m.group(0)
+        if w.startswith(("/", ".", "~")) or "REDACTED" in w or shannon(w) < MIN_WORD_ENTROPY:
+            return w
+        counts["entropy-word"] += 1
+        return tag("entropy-word")
+    return WORD.sub(repl, line)
+
+
+def _bare_tokens(text: str, counts: Counter) -> str:
+    """High-entropy words given to echo/printf, and inside heredoc bodies (no label to key on)."""
+    out, terminator = [], None
+    for line in text.split("\n"):
+        if terminator is not None:
+            if line.strip() == terminator:
+                terminator = None
+            else:
+                line = _entropy_words(line, counts)
+        elif re.search(r"\b(?:echo|printf)\b", line):
+            line = _entropy_words(line, counts)
+        if terminator is None:
+            here = HEREDOC.search(line)
+            terminator = here.group(1) if here else None
+        out.append(line)
+    return "\n".join(out)
+
+
+def _url_code(text: str, counts: Counter) -> str:
+    return sub_value(URL_QUERY_CODE, "url-query")(text, counts)
 
 
 def _url(text: str, counts: Counter) -> str:
@@ -218,6 +274,23 @@ def _markup(text: str, counts: Counter) -> str:
     return TAG.sub(html, XML_ELEM.sub(element, text))
 
 
+SERIAL = re.compile(
+    r"(\b(?:androidboot\.serialno|serialno|serial[ _\-]?number|SerialNumber|Serial)\b[ \t]*[=:][ \t]*)"
+    r"([A-Za-z0-9_.\-]{4,})", _I)
+
+
+def _serial(text: str, counts: Counter) -> str:
+    """Device serials. A bare `Serial:` only counts when the value looks like an id (8+ chars with a digit)."""
+    def repl(m: re.Match) -> str:
+        label, value = m.group(1), m.group(2)
+        plain = label.strip(" \t=:").lower() == "serial"
+        if value.startswith("<") or (plain and not (len(value) >= 8 and any(c.isdigit() for c in value))):
+            return m.group(0)
+        counts["serial"] += 1
+        return label + tag("serial")
+    return SERIAL.sub(repl, text)
+
+
 SECRET_RULES: tuple[tuple[str, Step], ...] = (
     ("pem-block", chain(sub_whole(PEM, "pem-block"), _inline_blocks)),
     ("json-secret", _json_secret),
@@ -227,7 +300,9 @@ SECRET_RULES: tuple[tuple[str, Step], ...] = (
     ("wg-key", chain(sub_value(WG_LINE, "wg-key"), sub_value(WG_OPT, "wg-key"), sub_whole(WG_B64, "wg-key"))),
     ("uci-sensitive", _uci),
     ("url-userinfo", _url),
-    ("cli-secret", _cli),
+    ("cli-secret", chain(_cli, _bare_tokens)),
+    ("url-query", _url_code),
+    ("serial", _serial),
     ("yaml-block", _yaml_block),
     ("labelled-secret", _labelled),
     ("at-secret", sub_value(AT_SECRET, "at-secret")),

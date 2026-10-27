@@ -88,10 +88,10 @@ def test_m5_long_benign_words_stay():
 
 
 @pytest.mark.parametrize("text", [f"+QCCID: 89860012345678901234F", "ICCID 8901260123456789012F detected",
-                                  "iccid: 89860012345678901234F", "sim 89860012345678901F ok"])
+                                  "iccid: 89860012345678901234F", "sim 8986001234567890123F ok"])
 def test_m5_iccid_with_trailing_f(text):
     out = redact.redact_text(text + "\n", salt="x")[0]
-    assert "8986001234567890" not in out and "890126012345678" not in out and "89860012345678901F" not in out
+    assert "8986001234567890" not in out and "890126012345678" not in out and "8986001234567890123F" not in out
 
 
 @pytest.mark.parametrize("text,leak", [

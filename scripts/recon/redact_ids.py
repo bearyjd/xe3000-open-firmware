@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from collections import Counter
 from collections.abc import Callable
@@ -18,11 +19,13 @@ IMEI_LABEL = re.compile(rf"(\b(?:IMEI|MEID)\b{LABEL_SEP})([0-9A-Fa-f]{{14,18}})"
 DIGITS15 = re.compile(r"(?<![0-9A-Za-z])\d{15}(?![0-9A-Za-z])")
 IMSI_LABEL = re.compile(rf"(\bIMSI\b{LABEL_SEP})(\d{{6,15}})", re.IGNORECASE)
 IMSI_BARE = re.compile(r"(?<![0-9A-Za-z])[2-7]\d{14}(?![0-9A-Za-z])")  # MCC 2xx-7xx
-ICCID_BARE = re.compile(r"(?<![0-9A-Za-z])89\d{17,18}(?![0-9A-Za-z])")
-ICCID_LABEL = re.compile(rf"(\bICCID\b{LABEL_SEP})(\d{{10,22}})", re.IGNORECASE)
+ICCID_BARE = re.compile(r"(?<![0-9A-Za-z])89\d{17,18}F?(?![0-9A-Za-z])", re.IGNORECASE)
+ICCID_LABEL = re.compile(rf"(\bICCID\b{LABEL_SEP})(\d{{10,22}}F?)", re.IGNORECASE)
 BEARER = re.compile(r"(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE)
 SK_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{16,}")
 HEX64 = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])")
+B64_LONG = re.compile(r"(?<![A-Za-z0-9+/_\-])[A-Za-z0-9+/]{32,}(?![A-Za-z0-9+/=_\-])")
+MIN_BLOB_ENTROPY = 3.8
 B64_BLOB = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{23,}={1,2}(?![A-Za-z0-9+/=])")
 WG_B64 = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
 MAC_COLON = re.compile(r"\b([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){2}):([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){2})\b")
@@ -58,6 +61,23 @@ def sub_whole(pattern: re.Pattern, rule: str) -> Step:
             return tag(rule)
         return pattern.sub(repl, text)
     return apply
+
+
+def shannon(word: str) -> float:
+    n = len(word)
+    return -sum(c / n * math.log2(c / n) for c in Counter(word).values()) if n else 0.0
+
+
+def long_b64(text: str, counts: Counter) -> str:
+    """Unpadded base64 (also with / and +): 32+ characters, mixed case and digits, not a path."""
+    def repl(m: re.Match) -> str:
+        w = m.group(0)
+        mixed = any(c.islower() for c in w) and any(c.isupper() for c in w) and any(c.isdigit() for c in w)
+        if not mixed or w.startswith("/") or shannon(w) < MIN_BLOB_ENTROPY:
+            return w
+        counts["b64-blob"] += 1
+        return tag("b64-blob")
+    return B64_LONG.sub(repl, text)
 
 
 def luhn_digits(text: str, counts: Counter) -> str:
@@ -101,6 +121,6 @@ IDENTIFIER_RULES: tuple[tuple[str, Step], ...] = (
 )
 BLOB_RULES: tuple[tuple[str, Step], ...] = (
     ("hex-psk", sub_whole(HEX64, "hex-psk")),
-    ("b64-blob", sub_whole(B64_BLOB, "b64-blob")),
+    ("b64-blob", chain(sub_whole(B64_BLOB, "b64-blob"), long_b64)),
     ("eui64", sub_value(EUI64, "eui64")),
 )
