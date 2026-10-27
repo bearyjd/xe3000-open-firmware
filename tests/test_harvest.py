@@ -134,6 +134,8 @@ def test_probe_mode_runs_only_the_probe(tmp_path, shell):
     assert sorted(frames) == ["cmd/busybox-list", "cmd/command-v", "cmd/uname"]
     assert outside == [f"@@DONE-{nonce} 3"] or outside == ["@@MISSING busybox", f"@@DONE-{nonce} 3"]
     assert "present cat" in frames["cmd/command-v"][1]
+    probed = frames["cmd/command-v"][1]
+    assert re.search(r"^(present|absent) pkill$", probed, re.M) and re.search(r"^(present|absent) pgrep$", probed, re.M)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -207,6 +209,12 @@ CRON = (
     "* * * * * x -p hunter2\n"
     "* * * * * x -U bob\n"
     "* * * * * fetch ftp://h/p\n"
+    "* * * * * x -pabc\n"
+    "* * * * * x -uroot\n"
+    "* * * * * x -Pabc\n"
+    "* * * * * PW_X=1 run\n"
+    "* * * * * WIFI_PSK=abc run\n"
+    "* * * * * API_X=1 run\n"
     "5 5 * * * last-line-without-newline"
 )
 
@@ -220,7 +228,7 @@ def test_crontab_lines_pass_through_the_conservative_filter(tmp_path):
     assert "hunter2" not in out and "bob" not in out and "abc" not in out and "keepme" not in out
     assert "*/5 * * * * /usr/bin/foo.sh" in out and "/sbin/reload_thing" in out
     assert "5 5 * * * last-line-without-newline" in out
-    assert "# file root" in out and "# dropped 12 line(s)" in out
+    assert "# file root" in out and "# dropped 18 line(s)" in out
 
 
 def _sleeper_shim(tmp_path, *names):
@@ -241,7 +249,7 @@ def test_blocked_read_and_blocked_command_are_cut_off(tmp_path):
     out = run_fn('frame_file t "$1"; frame_cmd kernel cmd/dmesg dmesg; frame_cmd hw cmd/ls ls -l /sys',
                  f, setup='TMO="timeout 1"', shim=shim)
     assert time.monotonic() - t0 < 12
-    assert len(re.findall(r"@@END-\S+ \S+ 124\n", out)) == 2  # head and dmesg timed out (exit 124)
+    assert len(re.findall(r"@@END-\S+ \S+ (?:124|143)\n", out)) == 2  # head and dmesg timed out (exit 124)
     assert "@@SKIPPED" in out  # ls -lnL (the size probe) timed out: skipped, not hung
 
 
@@ -315,6 +323,37 @@ def test_modinfo_called_once_per_module_and_not_when_sysfs_has_version(tmp_path)
     assert "@@BEGIN kernel cmd/modinfo/b" in out and "1.2" in out and "@@SKIPPED modinfo" not in out
 
 
+def test_collect_hw_risky_is_skipped_when_tmo_is_empty():
+    out = run_fn("collect_hw_risky", setup="TMO=")
+    for what in ("/sys/class/hwmon", "/sys/class/thermal", "/sys/class/power_supply", "/sys/kernel/debug/gpio"):
+        assert f"@@SKIPPED {what} no-timeout" in out, what
+    assert "@@BEGIN" not in out
+
+
+def test_collect_on_a_router_without_timeout_skips_risky_reads(tmp_path):
+    """Run a copy of collect.sh whose PATH has no `timeout` applet (the real one resets PATH itself)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for tool in ("cat", "head", "ls", "od", "readlink", "uname", "date", "grep", "hexdump", "lsmod", "dmesg"):
+        found = shutil.which(tool)
+        if found:
+            (bindir / tool).symlink_to(found)
+    script = tmp_path / "collect_nt.sh"
+    script.write_text(SRC.replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={bindir}", 1))
+    work = tmp_path / "work"
+    work.mkdir()
+    with open(script, "rb") as fh:
+        try:
+            p = subprocess.run(["sh", "-s", TAG], stdin=fh, capture_output=True, cwd=work, timeout=120,
+                               env={"PATH": os.environ["PATH"], "HOME": str(work)})
+        except subprocess.TimeoutExpired:
+            pytest.skip("collect.sh blocked on a sysfs read on this host")
+    nonce, frames, outside = parse_stream(p.stdout.decode("utf-8", "replace"))
+    for what in ("/sys/class/hwmon", "/sys/class/thermal", "/sys/class/power_supply", "/sys/kernel/debug/gpio"):
+        assert f"@@SKIPPED {what} no-timeout" in outside, what
+    assert not any(n.startswith(("sys/class/hwmon", "sys/class/thermal", "sys/class/power_supply")) for n in frames)
+
+
 # ---------------------------------------------------------------- harvest.sh with a fake ssh
 
 @pytest.fixture
@@ -352,8 +391,8 @@ def stream(*parts, nonce=N, done=True):
     return body + (f"@@DONE-{nonce} 2\n" if done else "")
 
 
-def frame(kind, name, content, nonce=N):
-    return f"@@BEGIN {kind} {name}\n{content}\n\n@@END-{nonce} {name} 0\n"
+def frame(kind, name, content, nonce=N, code=0):
+    return f"@@BEGIN {kind} {name}\n{content}\n\n@@END-{nonce} {name} {code}\n"
 
 
 GOOD = stream("@@MISSING ubus\n@@SKIPPED /x/serial excluded\n", frame("ident", "proc/cpuinfo", "model: x"),
@@ -510,7 +549,7 @@ def test_invalid_harvest_timeout_is_rejected(shim):
         assert not (shim.shimdir / "args").exists()
 
 
-STOP = "ssh root@$ROUTER_HOST \"pkill -f 'sh -s glinet-harvest-collect'\""
+STOP = "ssh root@$ROUTER_HOST \"pkill -f '[s]h -s glinet-harvest-collect'\""
 
 
 def test_dry_print_does_not_connect_and_needs_no_host(shim):
@@ -569,3 +608,21 @@ def test_no_hardcoded_ip_or_default_host():
     text = HARVEST.read_text() + (REPO / "justfile").read_text()
     assert not re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", text)
     assert "ROUTER_HOST:-" not in re.sub(r"\$\{ROUTER_HOST:-\}", "", text)
+
+
+def test_capped_frames_124_and_143_are_reported(shim):
+    s = stream(frame("sys", "cmd/a", "x", code=124), frame("sys", "cmd/b", "y", code=143), frame("sys", "cmd/c", "z"))
+    s = s.replace(f"@@DONE-{N} 2", f"@@DONE-{N} 3")
+    r = shim(s)
+    assert "capped=2" in r.stdout and "frames_ok=3" in r.stdout
+    assert "capped" in r.stderr.lower()
+    man = (only_run_dir(shim.out) / "manifest.tsv").read_text()
+    assert "CAPPED\tsys\tcmd/a\t124" in man and "CAPPED\tsys\tcmd/b\t143" in man and "cmd/c\texit=0" in man
+
+
+def test_no_timeout_skip_prints_a_clear_notice(shim):
+    s = stream("@@SKIPPED /sys/class/hwmon no-timeout\n@@SKIPPED /sys/class/thermal no-timeout\n", frame("ident", "a", "x"))
+    r = shim(s)
+    assert r.returncode == 0
+    assert "NOTICE" in r.stderr and "timeout" in r.stderr and "hwmon" in r.stderr
+    assert "NOTICE\tno-timeout" in (only_run_dir(shim.out) / "manifest.tsv").read_text()

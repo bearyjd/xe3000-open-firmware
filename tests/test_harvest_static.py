@@ -29,23 +29,40 @@ REDIR_OK = [
 
 DEV_OK = {"/dev/null", "/dev/ttyUSB*", "/dev/ttyACM*", "/dev/cdc-wdm*", "/dev/wwan*", "/dev/mhi*"}
 
-# External commands, exact form at command position (after stripping $TMO and allowed redirections).
+# External commands: exact form at command position -> (functions they may appear in, must be prefixed by $TMO).
+# None stands for the top level of the script.
+HEXFMT = """'16/1 "%02x " "\\n"'"""
 ALLOWED_EXTERNAL = {
-    "cat /proc/sys/kernel/random/uuid",
-    "date +%s",
-    'readlink -f "$ff_p"',
-    'ls -lnL "$ff_p"',
-    'od -An -v -tx1 "$ff_p"',
-    "od -An -tx1 /dev/null",
-    """hexdump -v -e '16/1 "%02x " "\\n"' "$ff_p\"""",
-    """hexdump -v -e '16/1 "%02x " "\\n"' /dev/null""",
-    'head -c "$MAXBYTES" "$ff_p"',
-    'cat "$ff_p"',
-    'ls -l "$mp_d"',
-    'readlink "$mo_f"',
-    "busybox --list",
-    "grep -E '^(od|hexdump|timeout|head|readlink|ls|netstat|logread|lsmod|modinfo|dmesg)$'",
+    "cat /proc/sys/kernel/random/uuid": ({None}, False),
+    "date +%s": ({None}, False),
+    'readlink -f "$ff_p"': ({"frame_file"}, True),
+    'ls -lnL "$ff_p"': ({"frame_file"}, True),
+    'od -An -v -tx1 "$ff_p"': ({"frame_file"}, True),
+    f'hexdump -v -e {HEXFMT} "$ff_p"': ({"frame_file"}, True),
+    'head -c "$MAXBYTES" "$ff_p"': ({"frame_file"}, True),
+    'cat "$ff_p"': ({"frame_file"}, True),
+    "od -An -tx1 /dev/null": ({"detect_hex"}, True),
+    f"hexdump -v -e {HEXFMT} /dev/null": ({"detect_hex"}, True),
+    'ls -l "$mp_d"': ({"modem_ports"}, True),
+    'readlink "$mo_f"': ({"modem_owners"}, True),
+    "busybox --list": ({"probe_busybox"}, False),
+    "grep -E '^(od|hexdump|timeout|head|readlink|ls|netstat|logread|lsmod|modinfo|dmesg)$'": ({"probe_busybox"}, False),
 }
+
+# Assignments whose value is pinned (raw text after the '=').
+PINNED_ASSIGN = {
+    "TMO": {'"timeout 10"', ""},
+    "ff_p": {"$2"},
+    "PATH": {"/usr/sbin:/usr/bin:/sbin:/bin"},
+    "FDT": {"/sys/firmware/fdt"},
+    "MODULES_FILE": {"/proc/modules"},
+    "SYSMODULE": {"/sys/module"},
+    "CRONDIR": {"/etc/crontabs"},
+    "HEX": {"od", "hexdump", ""},
+}
+
+# Literal absolute paths in `for ... in` lists may only live under these.
+LIST_PREFIXES = ("/proc/", "/sys/", "/etc/", "/lib/modules")
 
 # Shell builtins in their allowed forms (fullmatch).
 BUILTIN_OK = [
@@ -82,6 +99,28 @@ EXPECTED_FRAME_CMD = sorted([
     "frame_cmd sys cmd/ubus-list ubus -v list",
 ])
 
+EXPECTED_FILE_CALLS = sorted([
+    'frame_file "$1" "$2" "$3"',
+    "frame_file hw /sys/kernel/debug/gpio",
+    'frame_file hw-bin "$FDT" hex',
+    'frame_file ident "$ci_f"',
+    'opt_file config "$cc_f"',
+    'opt_file hw "$hh_a"',
+    'opt_file hw "$hl_d/$hl_a"',
+    'opt_file hw "$hp_d/$hp_a"',
+    'opt_file hw "$hs_a"',
+    'opt_file hw "$ht_d/$ht_a"',
+    'opt_file hw "$hu_d/$hu_a"',
+    'opt_file hw-dt "$dt_p" hex',
+    "opt_file ident /etc/glversion",
+    "opt_file ident /etc/openwrt_release",
+    'opt_file kernel "$SYSMODULE/$km_m/$km_a"',
+    'opt_file kernel "$km_a"',
+    'opt_file sys "$cs_f"',
+    'opt_file sys "$cs_f"',
+    'opt_file sys "$cs_f"',
+])
+
 EXPECTED_FRAME_FN = sorted([
     "frame_fn modem cmd/modem-owners modem_owners",
     "frame_fn modem cmd/modem-ports modem_ports",
@@ -94,7 +133,7 @@ EXPECTED_FRAME_FN = sorted([
 FORBIDDEN_WORDS = [
     "rm", "mv", "cp", "tee", "dd", "mkdir", "mount", "umount", "opkg", "uci", "fw_setenv", "reboot", "poweroff",
     "halt", "sysupgrade", "insmod", "modprobe", "rmmod", "chmod", "chown", "ln", "touch", "sed", "awk", "wget",
-    "curl", "nc", "ssh", "stty", "microcom", "socat", "gpioset", "sysctl", "kill", "killall", "pkill", "ifdown",
+    "curl", "nc", "ssh", "stty", "microcom", "socat", "gpioset", "sysctl", "kill", "killall", "ifdown",
     "ifup", "ps", "wifi", "iwpriv", "firstboot", "jffs2reset", "eval", "exec", "trap",
 ]
 
@@ -115,37 +154,66 @@ def _protect(line, store):
         store.append(m.group(0))
         return f"{PH}{len(store) - 1}{PH}"
 
-    return re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", rep, line)
+    return re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.", rep, line)
 
 
 def _restore(text, store):
     return re.sub(PH + r"(\d+)" + PH, lambda m: store[int(m.group(1))], text)
 
 
-def segments(lines):
-    """Yield normalized command segments (restored text) from logical lines."""
-    for line in lines:
-        store = []
-        t = _protect(_strip_redirs(line), store)
+class Seg:
+    def __init__(self, text, tmo, func, assigns, line):
+        self.text, self.tmo, self.func, self.assigns, self.line = text, tmo, func, assigns, line
+
+
+def _segs(text, func, line, top):
+    """Yield Seg objects for one logical line; command substitutions are analysed recursively, including the ones
+    inside double-quoted strings."""
+    store = []
+    t = _protect(_strip_redirs(text), store)
+    if top:
         t = re.sub(r"^\s*case\s+\S+\s+in\b\s*", "", t)
         t = re.sub(r"^\s*\w+\(\)\s*\{?\s*", "", t)  # function definition
         t = re.sub(r"^\s*[^\s()]+\)\s*", "", t)  # case label
-        t = re.sub(r"\$\(\([^()]*\)\)", "X", t)
-        subs = []
+    t = re.sub(r"\$\(\([^()]*\)\)", "X", t)
+    subs = []
+    while True:
+        m = re.search(r"\$\(([^()]*)\)", t)
+        if not m:
+            break
+        subs.append(_restore(m.group(1), store))
+        t = t[: m.start()] + "X" + t[m.end():]
+    for item in store:
+        if item.startswith('"'):
+            subs.extend(re.findall(r"\$\(([^()]*)\)", item))
+    for piece in re.split(r";|&&|\|\||\|", t):
+        seg = re.sub(r"\s+", " ", piece).strip()
+        seg = re.sub(r"^(?:(?:if|elif|while|until|then|do|else|!|\{)(?:\s+|$))+", "", seg)
+        tmo = bool(re.match(r"^\$TMO(?:\s+|$)", seg))
+        seg = re.sub(r"^\$TMO(?:\s+|$)", "", seg)
+        assigns = []
         while True:
-            m = re.search(r"\$\(([^()]*)\)", t)
+            m = re.match(r"^(\w+)=(\S*)\s*", seg)
             if not m:
                 break
-            subs.append(m.group(1))
-            t = t[: m.start()] + "X" + t[m.end():]
-        for piece in [t] + subs:
-            for seg in re.split(r";|&&|\|\||\|", piece):
-                seg = re.sub(r"\s+", " ", seg).strip()
-                seg = re.sub(r"^(?:(?:if|elif|while|until|then|do|else|!|\{)(?:\s+|$))+", "", seg)
-                seg = re.sub(r"^\$TMO(?:\s+|$)", "", seg)
-                seg = re.sub(r"^(?:\w+=\S*\s*)+", "", seg)
-                if seg:
-                    yield _restore(seg, store)
+            assigns.append((m.group(1), _restore(m.group(2), store)))
+            seg = seg[m.end():]
+        seg = _restore(seg, store)
+        if assigns or seg:
+            yield Seg(seg, tmo, func, assigns, line)
+    for sub in subs:
+        yield from _segs(sub, func, line, False)
+
+
+def iter_segments(lines):
+    func = None
+    for line in lines:
+        m = re.match(r"^(\w+)\(\)", line)
+        if m:
+            func = m.group(1)
+        yield from _segs(line, func, line, True)
+        if line.strip() == "}":
+            func = None
 
 
 def analyze(src):
@@ -170,28 +238,53 @@ def analyze(src):
     if re.search(r"\bset\s+-[a-zA-Z]*e", code):
         problems.append("set -e")
     funcs = set(re.findall(r"^\s*(\w+)\(\)", code, re.M))
-    cmds, fns = [], []
-    for seg in segments(lines):
-        first = seg.split()[0]
-        if first in ("for", "in", "fi", "done", "esac", "}", ";;"):
+    cmds, fns, files = [], [], []
+    for sg in iter_segments(lines):
+        for name, val in sg.assigns:
+            if name in PINNED_ASSIGN and val not in PINNED_ASSIGN[name]:
+                problems.append(f"assignment not allowed: {name}={val}")
+            if name == "TMO" and "command -v timeout" not in sg.line:
+                problems.append("TMO may only be assigned on its defining line")
+            if name == "ff_p" and sg.func != "frame_file":
+                problems.append("ff_p may only be assigned inside frame_file")
+        seg = sg.text
+        if not seg:
             continue
-        if seg in ('"$@"', '"$3"'):
+        first = seg.split()[0]
+        if first == "for":
+            for w in seg.split():
+                if w.startswith("/") and not (w.startswith(LIST_PREFIXES) or w in DEV_OK):
+                    problems.append(f"path not allowed in loop list: {w}")
+            continue
+        if first in ("in", "fi", "done", "esac", "}", ";;"):
+            continue
+        if seg == '"$@"':
+            if not (sg.func == "frame_cmd" and sg.tmo):
+                problems.append('"$@" is only allowed as `$TMO "$@"` inside frame_cmd')
+            continue
+        if seg == '"$3"':
+            if sg.func != "frame_fn":
+                problems.append('"$3" is only allowed inside frame_fn')
             continue
         if first in funcs:
-            if first == "frame_cmd":
-                cmds.append(seg)
-            elif first == "frame_fn":
-                fns.append(seg)
+            {"frame_cmd": cmds, "frame_fn": fns, "frame_file": files, "opt_file": files}.get(first, []).append(seg)
             continue
         if any(re.fullmatch(p, seg) for p in BUILTIN_OK):
             continue
         if seg in ALLOWED_EXTERNAL:
+            allowed_funcs, needs_tmo = ALLOWED_EXTERNAL[seg]
+            if sg.func not in allowed_funcs:
+                problems.append(f"command not allowed here ({sg.func}): {seg}")
+            elif needs_tmo and not sg.tmo:
+                problems.append(f"command must be prefixed by $TMO: {seg}")
             continue
         problems.append(f"command not allowed: {seg}")
     if sorted(cmds) != EXPECTED_FRAME_CMD:
         problems.append(f"frame_cmd list differs: {sorted(set(cmds) ^ set(EXPECTED_FRAME_CMD))}")
     if sorted(fns) != EXPECTED_FRAME_FN:
         problems.append(f"frame_fn list differs: {sorted(set(fns) ^ set(EXPECTED_FRAME_FN))}")
+    if sorted(files) != EXPECTED_FILE_CALLS:
+        problems.append(f"frame_file/opt_file calls differ: {sorted(set(files) ^ set(EXPECTED_FILE_CALLS))}")
     return problems
 
 
@@ -224,6 +317,18 @@ MUTATIONS = [
     "wifi down",
     "reboot",
     "frame_fn sys cmd/x something",
+    '[ -n "$(ubus call network.interface.wan down)" ]',
+    "ff_p=$(printf '/%s/ttyUSB2' dev)\ncat \"$ff_p\"",
+    "TMO='ubus call x'\n$TMO",
+    "TMO=",
+    "frame_file sys /sys/class/gpio/export",
+    "opt_file sys /sys/class/gpio/unexport",
+    '"$@"',
+    '"$3"',
+    "for x in /home/*; do frame_file sys \"$x\"; done",
+    "pkill -f x",
+    "pgrep x",
+    'x=$(readlink "$mo_f")',
     "ps w",
     "frame_cmd sys cmd/ps ps w",
     'cat "/proc/$p/cmdline"',
@@ -235,7 +340,9 @@ MUTATIONS = [
 
 @pytest.mark.parametrize("mutation", MUTATIONS)
 def test_mutation_is_rejected(mutation):
-    assert analyze(SRC + "\n" + mutation + "\n"), mutation
+    """The mutation must introduce at least one NEW problem on top of whatever the unmutated file has."""
+    base = set(analyze(SRC))
+    assert set(analyze(SRC + "\n" + mutation + "\n")) - base, mutation
 
 
 def test_mutation_inside_a_function_body_is_rejected():
@@ -261,12 +368,46 @@ def test_frames_are_nonce_authenticated():
     assert "@@END-%s" in SRC and "@@DONE-%s" in SRC and "@@COLLECT-VERSION 2 %s" in SRC
 
 
+STOP_OK = "pkill -f '[s]h -s glinet-harvest-collect'"
+STOP_BAD = "pkill -f 'sh -s glinet-harvest-collect'"
+
+
 def test_tag_and_stop_command_documented():
     assert "glinet-harvest-collect" in SRC
     text = HARVEST.read_text()
-    assert "pkill -f 'sh -s glinet-harvest-collect'" in text
+    assert STOP_OK in text and STOP_OK in SRC  # bracket form: the pkill never matches its own ssh shell
+    assert STOP_BAD not in text and STOP_BAD not in SRC
     assert "ServerAliveCountMax=3" in text and "timeout -k 10" in text
     assert re.search(r"^export LC_ALL=C", text, re.M)
+
+
+def test_prp_uses_the_bracket_stop_command():
+    prp = REPO / "docs" / "prp" / "0001-probes.md"
+    if not prp.exists():
+        pytest.skip("docs/ is not mounted in the test container")
+    text = prp.read_text()
+    assert STOP_BAD not in text
+    if "glinet-harvest-collect" in text:
+        assert STOP_OK in text
+
+
+def test_without_timeout_the_risky_sysfs_reads_are_skipped():
+    assert 'if [ -z "$TMO" ]; then' in SRC
+    for what in ("/sys/class/hwmon", "/sys/class/thermal", "/sys/class/power_supply", "/sys/kernel/debug/gpio"):
+        assert f"skipped {what} no-timeout" in SRC, what
+
+
+def test_timeout_exit_codes_documented_for_busybox_and_coreutils():
+    assert "143" in SRC and "124" in SRC
+
+
+def test_modem_owner_readlink_is_timeboxed():
+    assert 'mo_t=$($TMO readlink "$mo_f"' in SRC
+
+
+def test_probe_checks_for_pkill_and_pgrep_with_command_v_only():
+    body = SRC.split("probe_commands() {", 1)[1].split("\n}\n", 1)[0]
+    assert "pkill pgrep" in body and "command -v" in body
 
 
 def test_no_per_process_cmdline_and_no_ps():
