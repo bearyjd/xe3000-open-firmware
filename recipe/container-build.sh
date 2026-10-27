@@ -39,7 +39,7 @@ if [ -z "$pinned" ] || [ "$head" != "$pinned" ] || [ "$stamped" != "$pinned" ]; 
 fi
 
 # Prepared inputs must be exactly what prepare.sh recorded, and still free of credentials, before any container run.
-# shellcheck source=lib.sh
+# shellcheck source=/dev/null
 . "$HERE/lib.sh"
 xe3000_check_prepared_tree "$TREE" || exit 1
 

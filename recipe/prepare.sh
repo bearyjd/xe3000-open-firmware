@@ -37,7 +37,7 @@ die() {
 # Inputs: the overlay (recipe/files), local packages (recipe/feeds), patches, seed config and pins.
 check_inputs() {
 	local dir="$HERE/files" f rel
-	# shellcheck source=lib.sh
+	# shellcheck source=/dev/null
 	. "$HERE/lib.sh"
 	[ -d "$dir" ] || die "overlay directory missing: $dir"
 	xe3000_check_input_dir "$dir" "overlay" || exit 1
