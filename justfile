@@ -45,3 +45,12 @@ dry-run RUN_ID *ARGS: build
 analyze RUN_ID *ARGS: build
     ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} IMAGE={{quote(IMAGE)}} HARDENING={{quote(hardening)}} \
       bash {{ROOT}}/scripts/analyze-container.sh "$@"
+
+# Phase 1: print the exact script that would run on the router. Never connects.
+harvest-print:
+    bash {{ROOT}}/scripts/harvest.sh --dry-print
+
+# Phase 1: read-only harvest over one ssh session. ROUTER_HOST is required (no default). Raw output stays in harvest/raw/.
+harvest:
+    @test -n "${ROUTER_HOST:-}" || { echo "harvest: ROUTER_HOST is required (no default)" >&2; exit 1; }
+    bash {{ROOT}}/scripts/harvest.sh

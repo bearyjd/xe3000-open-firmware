@@ -136,6 +136,15 @@ Transport: one `ssh -o BatchMode=yes -o ConnectTimeout=10 root@$ROUTER_HOST 'sh 
 
 Nothing in this list writes, mounts, loads modules, calls `ubus call` besides `system board`, opens a modem port, or touches `/sys` attributes that are write-only or have read side-effects.
 
+**Implemented as `scripts/remote/collect.sh` + `scripts/harvest.sh` (deviations from the list above):**
+- Process names come from `/proc/<pid>/comm` only; `cmdline` is never read. Fd owners use `readlink` on `/proc/*/fd/*` (no node is opened) instead of `ls -l`.
+- `power_supply/*/uevent` is skipped: it re-exposes `POWER_SUPPLY_SERIAL_NUMBER`. Any path whose basename contains `serial`, plus `*/private/*` and `id_*` key names, is also excluded.
+- Files over 1 MiB, files without owner-read permission (write-only attributes), and names outside `[A-Za-z0-9._/@:+=,#-]` are skipped with `@@SKIPPED`.
+- The `/proc/device-tree` fallback (hex per property, depth <= 6) runs only when `/sys/firmware/fdt` is absent.
+- `/proc/net/{tcp,tcp6,udp,udp6}` are always read; `netstat` additionally if installed. `modinfo` and the `/sys/module` attributes are both collected.
+- Added `@@COLLECT-VERSION` and a final `@@DONE <frames>` marker; a stream without `@@DONE`, a frame without `@@END` (`*.PARTIAL`), or a non-zero ssh exit makes `harvest.sh` exit 2 and the run must not be analysed as whole.
+- `harvest.sh` rejects frame names with `..`, absolute or empty segments, bad characters, duplicates, or a `.PARTIAL` suffix.
+
 ## 7. Outputs
 
 - `harvest/redacted/`, `redaction-report.json`, preflight stamp
