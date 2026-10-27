@@ -6,8 +6,14 @@ title = "xe3000-open-firmware recon pre-flight"
 
 [[rules]]
 id = "uci-secret-option"
-description = "UCI option/list whose name suggests a secret, with a non-redacted value"
-regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:\S*(?:key|psk|pass|passwd|password|secret|token|private|auth|hash|cert|username|bind_?code|auth_?code|pair\w*code|activation_?code)\S*|(?:\S*[_.\-])?sid)[ \t]+['"]?([^\s'"<]\S*)'''
+description = "UCI option/list with a credential-like name (password, token, secret, psk...): any value"
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:\S*(?:pass|passwd|password|passphrase|secret|token|psk|pwd|cred|cookie|bind_?code|auth_?code|pair\w*code|activation_?code)\S*)[ \t]+['"]?([^\s'"<]\S*)'''
+secretGroup = 1
+
+[[rules]]
+id = "uci-ambiguous-option"
+description = "UCI option/list with an ambiguous name (key, auth, sid, hash, cert...); plain settings are allowed"
+regex = '''(?im)^[ \t]*(?:option|list)[ \t]+(?:\S*(?:key|private|auth|hash|cert|username)\S*|(?:\S*[_.\-])?sid)[ \t]+['"]?([^\s'"<]\S*)'''
 secretGroup = 1
 [[rules.allowlists]]
 regexTarget = "secret"
@@ -96,12 +102,12 @@ secretGroup = 1
 
 [[rules]]
 id = "json-secret-value"
-description = "JSON string value under a secret-looking key"
+description = "JSON string value under a secret-looking key (ubus type names are not values)"
 regex = '''(?i)"[^"\n]*(?:pass|psk|token|secret|sid|hash|key|auth|cert|username|pwd|cred|session)[^"\n]*"\s*:\s*"([^"<\n][^"\n]*)"'''
 secretGroup = 1
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''(?i)^(string|integer|boolean|number|object|array|double|true|false|null|\d{1,2}|(/[^\s/]+)+|wpa[\w+-]*|sae|eap|none)$''']
+regexes = ['''^(String|Integer|Boolean|Number|Object|Array|Double|string|integer|boolean|number|object|array|double)$''']
 
 [[rules]]
 id = "json-pin-number"
@@ -143,8 +149,17 @@ secretGroup = 1
 
 [[rules]]
 id = "assign-labelled-secret"
-description = "NAME=value, NAME: value, NAME => value, NAME:: value or NAME<TAB>value where NAME ENDS in a secret word"
-regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:key|psk|passwd|password|passphrase|secret|token|hash|auth|cookie|pwd|cred)|(?:[A-Za-z0-9_.\-]*[_.\-])?(?:pass|sid|pin|puk)|(?:key|secret|psk|password|passwd|passphrase|token|pass|pwd)[_.\-][A-Za-z0-9_.\-]*)[0-9]*(?:[ \t]*(?:=>|::|[=:：])[ \t]*|\t+)("[^"\n<]+"|'[^'\n<]+'|[^\s"'<=:>|]\S*)'''
+description = "NAME=value, NAME: value, NAME => value, NAME:: value or NAME<TAB>value where NAME is a credential (password, token, secret, psk...): any value"
+regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:psk|passwd|password|passphrase|secret|token|cookie|pwd|cred)|(?:key|secret|psk|password|passwd|passphrase|token|pass|pwd)[_.\-][A-Za-z0-9_.\-]*)[0-9]*(?:[ \t]*(?:=>|::|[=:：])[ \t]*|\t+)("[^"\n<]+"|'[^'\n<]+'|[^\s"'<=:>|]\S*)'''
+secretGroup = 1
+[[rules.allowlists]]
+regexTarget = "line"
+regexes = ['''(?i)(?:^|[^A-Za-z0-9])[A-Za-z0-9_.\-]*(?:key_mgmt|password_file|password_policy|secret_type|token_bucket|hash_type|passphrase_file|key_type|key_len\w*|key_id|key_size)[0-9]*[ \t]*[=:]\s*["']?(?:\d{1,2}|wpa[\w+-]*|sae|eap|none|strict|relaxed|sha\d+|md5|crc32c?|rsa|ec|ecdsa|ed25519|aes\d*|(?:/[^\s/]+)+)["']?\s*$''']
+
+[[rules]]
+id = "assign-ambiguous-secret"
+description = "NAME=value where NAME is ambiguous (key, auth, sid, hash, pin...); plain settings are allowed"
+regex = '''(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9_.\-]*(?:key|auth|hash)|(?:[A-Za-z0-9_.\-]*[_.\-])?(?:sid|pin|puk|pass))[0-9]*(?:[ \t]*(?:=>|::|[=:：])[ \t]*|\t+)("[^"\n<]+"|'[^'\n<]+'|[^\s"'<=:>|]\S*)'''
 secretGroup = 1
 [[rules.allowlists]]
 regexTarget = "secret"

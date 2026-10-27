@@ -10,6 +10,8 @@ from collections import defaultdict
 from pathlib import Path
 from urllib.parse import quote
 
+from recon import canary
+
 EVIDENCE_BASE = "harvest"  # evidence files live in the gitignored zones; links are local
 UNGROUNDED_LABEL = "UNGROUNDED"
 GROUNDED_LABEL = "grounded"
@@ -59,16 +61,18 @@ def render_index(counts: dict[str, int], run_id: str) -> str:
                       "| Category | Findings |", "|---|---|", *rows]) + "\n"
 
 
-def load_findings(run_dir: Path) -> list[dict]:
+def load_findings(run_dir: Path, sanitizer: canary.Sanitizer | None = None) -> list[dict]:
+    """Findings with any known secret (canary file) removed, whatever the model echoed."""
+    san = sanitizer or canary.Sanitizer.from_file()
     path = Path(run_dir) / "findings.jsonl"
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [san.obj(json.loads(line)) for line in path.read_text().splitlines() if line.strip()]
 
 
-def generate(run_dir: Path, out_dir: Path) -> list[Path]:
+def generate(run_dir: Path, out_dir: Path, sanitizer: canary.Sanitizer | None = None) -> list[Path]:
     """Write one markdown file per category plus index.md; return the written paths."""
     run_dir, out_dir = Path(run_dir), Path(out_dir)
     by_category: dict[str, list[dict]] = defaultdict(list)
-    for f in load_findings(run_dir):
+    for f in load_findings(run_dir, sanitizer):
         by_category[f["category"]].append(f)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []

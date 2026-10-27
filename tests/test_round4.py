@@ -87,7 +87,7 @@ def test_retry_cannot_exceed_the_input_token_cap(root, stamp):
     assert cli.main(argv, client_factory=lambda: client) == 0
     assert len(client.create_calls) == 1  # initial tokens == cap: no retry fits
     assert any("input token" in r["reason"] for r in read_jsonl(root / "findings" / "raw" / "r1" / "rejected.jsonl"))
-    assert _manifest(root)["committed_input_tokens"] == 1000
+    assert _manifest(root, "r1")["committed_input_tokens"] == 1000
 
 
 def test_retry_is_counted_on_the_exact_retry_request(root, stamp):
@@ -102,7 +102,7 @@ def test_retry_is_counted_on_the_exact_retry_request(root, stamp):
     argv = ["--root", str(root), "--run-id", "r1", "--no-canary", "--allow-extra", "**", "--max-usd", "5"]
     assert cli.main(argv, client_factory=lambda: client) == 0
     assert any("rejected findings" in c for c in counted)  # the retry prompt itself was counted
-    assert _manifest(root)["committed_input_tokens"] == 100 * 3
+    assert _manifest(root, "r1")["committed_input_tokens"] == 100 * 3
 
 
 def test_synthesis_goes_through_the_same_token_gate(stamped):

@@ -98,5 +98,6 @@ add("cloud-bind-url", "https://goodcloud.xyz/bind?code=%s&mac=xx\n"%BIND, BIND, 
 add("sim-puk", "option puk '%s'\n"%(SIMPIN+SIMPIN), SIMPIN+SIMPIN, "SIM PUK")
 add("access-token-json", '{"access_token":"%s","expires":3600}\n'%CLTOK, CLTOK, "oauth json")
 add("mysql-cmd", "mysql -u root -p%s mydb\n"%ADMIN, ADMIN, "mysql -p")
-add("authkeys-opts", 'command="/bin/x",no-pty ssh-ed25519 %s key\n'%base64.b64encode(secrets.token_bytes(32)).decode(), "irrelevant", "authorized_keys w/ options")
+_AK = base64.b64encode(secrets.token_bytes(32)).decode()
+add("authkeys-opts", 'command="/bin/x",no-pty ssh-ed25519 %s key\n'%_AK, _AK, "authorized_keys w/ options (key blob redacted)")
 CASES = C

@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from recon import cost, runner
+from recon import canary, cost, runner
 from recon.client import ReconClient, load_env
 from recon.paths import PathRefused, allowed_roots
 from recon.scrub import scrub
@@ -80,18 +80,30 @@ def _config(args: argparse.Namespace) -> runner.RunConfig:
                             batch_poll_seconds=args.batch_poll, synthesize=args.synthesize)
 
 
+def _lenient_sanitizer(args: argparse.Namespace) -> canary.Sanitizer:
+    """Known-secret sanitiser for messages; an unusable canary file is reported by the run itself."""
+    if args.no_canary:
+        return canary.Sanitizer(())
+    try:
+        return canary.Sanitizer.from_file(args.canary_file)
+    except (canary.CanaryError, OSError):
+        return canary.Sanitizer(())
+
+
 def main(argv: Sequence[str] | None = None, client_factory: Callable[[], object] | None = None,
          out: Callable[[str], None] = print) -> int:
     args = build_parser().parse_args(argv)
+    san = _lenient_sanitizer(args)
+    show = lambda line: san.text(scrub(line))  # noqa: E731 - one-line helper
     try:
         load_env(args.env_file)
         cfg = _config(args)
         factory = client_factory or ReconClient
-        runner.run(cfg, factory, out=lambda line: out(scrub(line)))
+        runner.run(cfg, factory, out=lambda line: out(show(line)))
     except (PathRefused, runner.RunRefused, cost.CapExceeded) as exc:
-        print(scrub(f"analyze: refused: {exc}"), file=sys.stderr)
+        print(show(f"analyze: refused: {exc}"), file=sys.stderr)
         return EXIT_REFUSED
     except Exception as exc:  # noqa: BLE001 - last line of defence: never show a raw SDK message
-        print(scrub(f"analyze: failed: {type(exc).__name__}: {exc}"), file=sys.stderr)
+        print(show(f"analyze: failed: {type(exc).__name__}: {exc}"), file=sys.stderr)
         return EXIT_REFUSED
     return EXIT_OK

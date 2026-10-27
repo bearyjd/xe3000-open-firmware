@@ -176,9 +176,27 @@ def _scan_one(directory: Path, config: Path, podman, image, gitleaks_bin, runner
     return hits
 
 
+def _settings_problem(root: Path, config: Path, podman, image: str, gitleaks_bin, accept_local_binary: bool) -> str | None:
+    """Why this scan cannot be attested by the default stamp, or None. The stamp names the repository's gitleaks
+    config and pinned image, so it may only be written for a scan that actually used exactly those."""
+    ctx = stamp_context(root)
+    if ctx is None:
+        return "containers/gitleaks.toml or a digest-pinned containers/gitleaks.image is missing"
+    if hashlib.sha256(Path(config).read_bytes()).hexdigest() != ctx["config_sha256"]:
+        return "config differs from containers/gitleaks.toml"
+    if accept_local_binary:  # tests only: a local binary cannot attest the pinned image
+        return None
+    if gitleaks_bin or not podman:
+        return "scan did not run in the pinned container"
+    if image != ctx["image"]:
+        return "image differs from containers/gitleaks.image"
+    return None
+
+
 def run_preflight(dirs: Sequence[Path], root: Path, *, config: Path, podman: Sequence[str] | None,
                   image: str, gitleaks_bin: str | None,
-                  runner: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> PreflightResult:
+                  runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+                  accept_local_binary: bool = False) -> PreflightResult:
     digest = tree_hash(dirs, root)  # also enforces the path allowlist before anything is mounted
     hits: tuple[Hit, ...] = ()
     for directory in dirs:
@@ -186,6 +204,9 @@ def run_preflight(dirs: Sequence[Path], root: Path, *, config: Path, podman: Seq
             hits += _scan_one(Path(directory).resolve(), Path(config).resolve(), podman, image, gitleaks_bin, runner)
     if hits:
         return PreflightResult(hits, digest, None)
+    problem = _settings_problem(root, config, podman, image, gitleaks_bin, accept_local_binary)
+    if problem:
+        raise PreflightError(f"scanner settings differ from required defaults ({problem}); no stamp written")
     return PreflightResult((), digest, write_stamp(root, digest))
 
 

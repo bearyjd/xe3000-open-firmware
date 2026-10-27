@@ -85,14 +85,14 @@ def _fake_runner(returncode, stdout="[]", stderr=""):
 
 def test_run_preflight_writes_stamp_on_clean(root, fixture_tree):
     res = preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                  image="i@sha256:" + "0" * 64, gitleaks_bin=None, runner=_fake_runner(0))
+                                  image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None, runner=_fake_runner(0))
     assert res.hits == () and res.stamp and res.stamp.exists()
 
 
 def test_run_preflight_hit_no_stamp_and_no_value_in_output(root, fixture_tree, capsys):
     raw = json.dumps([{"RuleID": "r1", "StartLine": 2, "File": "/scan/etc/config/network", "Secret": "REDACTED"}])
     res = preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                  image="i@sha256:" + "0" * 64, gitleaks_bin=None, runner=_fake_runner(7, raw))
+                                  image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None, runner=_fake_runner(7, raw))
     assert res.stamp is None and res.hits == (preflight.Hit("redacted/etc/config/network", 2, "r1"),)
     assert not list((root / "cache" / "preflight").glob("*.ok")) if (root / "cache" / "preflight").exists() else True
 
@@ -100,7 +100,7 @@ def test_run_preflight_hit_no_stamp_and_no_value_in_output(root, fixture_tree, c
 def test_run_preflight_error_exit_raises_without_leaking(root, fixture_tree):
     with pytest.raises(preflight.PreflightError) as ei:
         preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                image="i@sha256:" + "0" * 64, gitleaks_bin=None,
+                                image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None,
                                 runner=_fake_runner(2, "", "secret-ish stderr text"))
     assert "secret-ish" not in str(ei.value) and "2" in str(ei.value)
 
@@ -140,7 +140,8 @@ def _scan(root, dirs):
     podman = shutil.which("podman")
     local = CFG["gitleaks_bin"]
     return preflight.run_preflight(dirs, root, config=GITLEAKS_TOML, podman=None if local else [podman],
-                                   image=preflight.read_image(IMAGE_FILE), gitleaks_bin=local)
+                                   image=preflight.read_image(IMAGE_FILE), gitleaks_bin=local,
+                                   accept_local_binary=bool(local))
 
 
 def _redacted_root(root, tmp_path, disabled):
@@ -229,7 +230,7 @@ def test_leak_exit_with_unparseable_or_empty_report_never_stamps(root, fixture_t
     for stdout in ("", "[]", "null"):
         with pytest.raises(preflight.PreflightError):
             preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML, podman=["p"],
-                                    image="i@sha256:" + "0" * 64, gitleaks_bin=None, runner=_fake_runner(7, stdout))
+                                    image=preflight.read_image(IMAGE_FILE), gitleaks_bin=None, runner=_fake_runner(7, stdout))
     assert not (root / "cache" / "preflight").exists()
 
 

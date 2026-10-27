@@ -10,6 +10,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import stat
 import sys
 import urllib.parse
@@ -107,6 +108,40 @@ def scan(files: Mapping[str, str], canaries: Sequence[str]) -> list[tuple[str, i
             if any(any(v in lowered for v in ci) or any(v in line for v in cs) for ci, cs in compiled):
                 hits.append((name, number))
     return hits
+
+
+MASK = "<REDACTED:canary>"
+
+
+class Sanitizer:
+    """Removes known secrets (every transform) from text and nested data before anything is persisted."""
+
+    def __init__(self, canaries: Sequence[str]) -> None:
+        pairs = [variants(c) for c in canaries]
+        ci = sorted({v for p in pairs for v in p[0]}, key=len, reverse=True)
+        cs = sorted({v for p in pairs for v in p[1]}, key=len, reverse=True)
+        self._ci = re.compile("|".join(re.escape(v) for v in ci), re.IGNORECASE) if ci else None
+        self._cs = re.compile("|".join(re.escape(v) for v in cs)) if cs else None
+
+    @classmethod
+    def from_file(cls, path: Path | None = None) -> "Sanitizer":
+        """Empty sanitiser when there is no canary file; CanaryError if the file is unusable."""
+        return cls(load_canaries(path or default_path()) or ())
+
+    def text(self, value: str) -> str:
+        for rx in (self._ci, self._cs):
+            if rx is not None:
+                value = rx.sub(MASK, value)
+        return value
+
+    def obj(self, value):
+        if isinstance(value, str):
+            return self.text(value)
+        if isinstance(value, dict):
+            return {self.text(k) if isinstance(k, str) else k: self.obj(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self.obj(v) for v in value]
+        return value
 
 
 def check(files: Mapping[str, str], *, skip: bool, path: Path | None = None) -> list[tuple[str, int]]:

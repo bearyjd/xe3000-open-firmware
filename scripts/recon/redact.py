@@ -15,6 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 from recon.redact_ids import BLOB_RULES, IDENTIFIER_RULES, luhn_ok, pseudonymize_macs  # noqa: F401 (luhn_ok re-export)
+from recon.redact_names import SENTINEL
 from recon.redact_secrets import SECRET_RULES
 
 MAC_SALT_ENV = "RECON_MAC_SALT"
@@ -22,7 +23,6 @@ DEFAULT_SALT_FILE = Path("cache") / "mac-salt"
 SKIPPED_BINARY = "skipped-binary"
 EXCLUDED = "excluded"
 MARKER_NAME = ".recon-redacted"
-MAX_PASSES = 4
 
 # Order matters: key blocks, JSON and structured forms first, the generic labelled rule after the specific ones.
 RULES = (*SECRET_RULES, *IDENTIFIER_RULES, *BLOB_RULES)
@@ -34,19 +34,16 @@ EXCLUDED_FRAGMENTS = ("wpa_psk", "userpass", "auth-user-pass", "htpasswd")
 
 
 def redact_text(text: str, disabled: frozenset[str] = frozenset(), salt: str = "") -> tuple[str, Counter]:
-    """Return (redacted text, per-rule counts). Rules repeat until the text stops changing (chained labels).
-    `disabled` is for tests of the independent pre-flight."""
+    """Return (redacted text, per-rule counts), one pass. Chained labels are handled inside the labelled rule
+    (it rescans inside non-secret values). `disabled` is for tests of the independent pre-flight."""
     counts: Counter = Counter()
-    for _ in range(MAX_PASSES):
-        before = text
-        for name, apply in RULES:
-            if name not in disabled:
-                text = apply(text, counts)
-        if text == before:
-            break
+    text = text.replace(SENTINEL, "")  # the marker is private to this call
+    for name, apply in RULES:
+        if name not in disabled:
+            text = apply(text, counts)
     if "mac" not in disabled:
         text = pseudonymize_macs(text, counts, salt)
-    return text, counts
+    return text.replace(SENTINEL, ""), counts
 
 
 def _is_excluded(rel: Path) -> bool:
