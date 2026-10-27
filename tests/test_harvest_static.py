@@ -23,7 +23,7 @@ REDIR_OK = [
     r"<\s*/dev/null(?![\w./*-])",
     r'<\s*"\$MODULES_FILE"',
     r'<\s*"/proc/\$mo_p/comm"',
-    r'<\s*"/proc/\$pt_p/comm"',
+    r'<\s*"\$pt_root/\$pt_p/comm"',
     r'<\s*"\$ct_f"',
 ]
 
