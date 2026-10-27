@@ -1,5 +1,6 @@
 import json
 import os
+from dataclasses import replace
 import re
 
 import pytest
@@ -369,7 +370,7 @@ def test_batch_wait_times_out(stamped):
         runner.run(cfg, lambda: Never(script=always_good), out=lambda _l: None, sleep=slept.append)
     assert sum(slept) >= 25 and len(slept) < 10
     manifest = json.loads((stamped / "findings" / "raw" / "t" / "manifest.json").read_text())
-    assert manifest["batch_id"] == "b1" and manifest["status"] == "error"
+    assert manifest["batch_id"] == "b1" and manifest["status"] == "batch-pending" and manifest["error"]
 
 
 class NoneBatch(FakeClient):
@@ -544,7 +545,7 @@ def test_resume_polls_existing_batch_without_creating_a_new_one(stamped):
     with pytest.raises(runner.RunFailed, match="timed out"):
         runner.run(_cfg(stamped), lambda: client, out=lambda _l: None, sleep=lambda _s: None)
     first = json.loads((stamped / "findings" / "raw" / "t" / "manifest.json").read_text())
-    assert first["batch_id"] == "b1" and first["status"] == "error" and Gate.batch_creates == 1
+    assert first["batch_id"] == "b1" and first["status"] == "batch-pending" and Gate.batch_creates == 1
     client.done = True
     res = runner.run(_cfg(stamped, resume_batch_id="b1"), lambda: client, out=lambda _l: None, sleep=lambda _s: None)
     assert Gate.batch_creates == 1 and client.create_calls == []
@@ -591,3 +592,120 @@ def test_cli_resume_flag_implies_batch(stamped):
     args = cli.build_parser().parse_args(["--run-id", "x", "--batch-timeout", "30", "--batch-poll", "2"])
     cfg = cli._config(args)
     assert cfg.batch_timeout_seconds == 30 and cfg.batch_poll_seconds == 2
+
+
+# ================= PR1 final review =================
+
+def _fail_first(root):
+    from recon import runner
+    client = Gate(script=always_good)
+    Gate.done = False
+    with pytest.raises(runner.RunFailed):
+        runner.run(_cfg(root), lambda: client, out=lambda _l: None, sleep=lambda _s: None)
+    client.done = True
+    return client
+
+
+def _resume(root, client, **kw):
+    from recon import runner
+    return runner.run(_cfg(root, resume_batch_id="b1", **kw), lambda: client, out=lambda _l: None,
+                      sleep=lambda _s: None)
+
+
+def _manifest(root, run_id="t"):
+    return json.loads((root / "findings" / "raw" / run_id / "manifest.json").read_text())
+
+
+def test_resume_refused_unless_prior_status_is_batch_pending(stamped):
+    from recon import runner
+    client = _fail_first(stamped)
+    assert _resume(stamped, client).status == "ok"  # now the manifest says "ok"
+    with pytest.raises(runner.RunRefused, match="batch-pending"):
+        _resume(stamped, client)
+
+
+def test_resume_refused_if_inputs_changed(stamped, stamp):
+    from recon import runner
+    client = _fail_first(stamped)
+    (stamped / "harvest" / "redacted" / "etc" / "config" / "network").write_text("changed after the batch\n")
+    stamp(stamped)
+    with pytest.raises(runner.RunRefused, match="input"):
+        _resume(stamped, client)
+
+
+def test_resume_refused_if_model_or_max_tokens_differ(stamped):
+    from recon import runner
+    client = _fail_first(stamped)
+    with pytest.raises(runner.RunRefused, match="model"):
+        runner.run(replace(_cfg(stamped, resume_batch_id="b1"), model=cost.DEFAULT_MODEL_CHEAP), lambda: client,
+                   out=lambda _l: None, sleep=lambda _s: None)
+    with pytest.raises(runner.RunRefused, match="max_tokens"):
+        _resume(stamped, client, max_tokens=2048)
+    assert _manifest(stamped)["max_tokens"] == 4096
+
+
+def test_excluded_files_are_never_sent_and_listed_as_skipped(root, stamp):
+    one_file_root(root, stamp)
+    up = root / "unpacked"
+    (up / "etc" / "dropbear").mkdir(parents=True)
+    (up / "etc" / "shadow").write_text("root:x:0:0\n")
+    (up / "etc" / "dropbear" / "dropbear_ed25519_host_key").write_text("hostkeymaterial\n")
+    (up / "etc" / "tls.pem").write_text("pemmaterialhere\n")
+    (up / "etc" / "serial_number").write_text("SN1234567890\n")
+    red = root / "harvest" / "redacted" / "etc"
+    (red / "other.key").write_text("keymaterialhere\n")
+    stamp(root)
+    client = FakeClient(script=always_good)
+    assert run_cli(root, client, "--max-usd", "5") == 0
+    sent = json.dumps([c[2] for c in client.create_calls] + [c[2] for c in client.count_calls])
+    for leak in ("root:x:0:0", "hostkeymaterial", "pemmaterialhere", "SN1234567890", "keymaterialhere"):
+        assert leak not in sent
+    skipped = {s["name"]: s["reason"] for s in _manifest(root, "r1")["skipped"]}
+    assert {"unpacked/etc/shadow", "unpacked/etc/dropbear/dropbear_ed25519_host_key", "unpacked/etc/tls.pem",
+            "unpacked/etc/serial_number", "redacted/etc/other.key"} <= set(skipped)
+    assert set(skipped.values()) == {"excluded"}
+
+
+def test_failed_resume_does_not_clobber_existing_outputs(stamped):
+    from recon import runner
+    client = _fail_first(stamped)
+    run_dir = stamped / "findings" / "raw" / "t"
+    (run_dir / "findings.jsonl").write_text('{"kept": 1}\n')
+    (run_dir / "rejected.jsonl").write_text('{"kept": 2}\n')
+    client.done = False
+    with pytest.raises(runner.RunFailed):
+        _resume(stamped, client)
+    assert (run_dir / "findings.jsonl").read_text() == '{"kept": 1}\n'
+    assert (run_dir / "rejected.jsonl").read_text() == '{"kept": 2}\n'
+    assert _manifest(stamped)["status"] == "batch-pending"
+
+
+def test_manifest_actual_covers_this_invocation_only(stamped):
+    from recon import runner
+    client = _fail_first(stamped)
+    _resume(stamped, client)
+    assert _manifest(stamped)["actual"]["covers"] == "this invocation only"
+
+
+def test_resume_keeps_prior_sync_spend_in_committed_usd(root, stamp):
+    """Pins max(est.usd, prior committed): a first run that already spent sync retries must not be forgotten."""
+    from recon import runner
+    one_file_root(root, stamp)
+    state = {"fail": True}
+
+    def script(i, messages):
+        if "rejected findings" in messages[0]["content"] and state["fail"]:
+            return RuntimeError("network down")
+        return response([bad_finding(messages)])
+    client = Gate(script=script, tokens=100)
+    Gate.done = False
+    client.done = True  # batch ends at once; the first run dies on its first sync retry
+    with pytest.raises(runner.RunFailed):
+        runner.run(_cfg(root), lambda: client, out=lambda _l: None, sleep=lambda _s: None)
+    prior = _manifest(root)
+    extra = prior["committed_usd"] - prior["estimate"]["worst_case_usd"]
+    assert extra > 0 and prior["status"] == "batch-pending"
+    state["fail"] = False
+    _resume(root, client)
+    final = _manifest(root)
+    assert final["committed_usd"] >= prior["committed_usd"] + 1.9 * extra

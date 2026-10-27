@@ -65,3 +65,14 @@ def test_no_old_image_name_anywhere():
     for path in ("justfile", "containers/recon.Containerfile", "containers/gitleaks.toml"):
         assert "passerelle-recon" not in (REPO / path).read_text(), path
     assert 'title = "xe3000-open-firmware recon pre-flight"' in (REPO / "containers" / "gitleaks.toml").read_text()
+
+
+def test_docs_reflect_review_fixes():
+    prp = (REPO / "docs" / "prp" / "0001-probes.md").read_text()
+    assert "1.25" in prp and "cache-write" in prp
+    assert "prompt hash" in prp and "max_tokens" in prp and "SCHEMA" in prp
+    assert "synthesis.md" in prp and "batch-pending" in prp
+    assert "pip" in prp and "hash" in prp and "accepted risk" in prp.lower()
+    readme = (REPO / "README.md").read_text()
+    assert "redact-unpacked" in readme and "`redact`" in readme
+    assert "Phase 1" in readme and "planned" in readme.lower()

@@ -247,6 +247,27 @@ def test_entropy_rules_catch_what_the_redactor_does_not_know(root, tmp_path):
     assert res.stamp is None
 
 
+S1_LINES = ["token=aaaa1111.bbbb2222.cccc3333", 'secret: "Ab!cdefgh9"', "api_key = 'ab!cdef12'",
+            'wep_key0="p@ss!x"', "password: hunter2xyz", "passwd: s3cretpw", "Authorization: Basic dXNlcjpwYXNz=="]
+S1_BENIGN = ["option device 'eth1'", "key_mgmt=WPA-PSK", "keyboard=us", "password_policy:", "bypass=1", "hash_type=sha256"]
+
+
+@pytest.mark.requires_gitleaks
+@pytest.mark.parametrize("line", S1_LINES)
+def test_gitleaks_has_its_own_rules_for_labelled_secrets(root, line):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text(line + "\n")  # NOT passed through the redactor
+    res = _scan(root, [root / "harvest" / "redacted"])
+    assert res.stamp is None and [h.file for h in res.hits] == ["redacted/etc/x.txt"], res.hits
+
+
+@pytest.mark.requires_gitleaks
+def test_gitleaks_stays_quiet_on_benign_labels(root):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text("\n".join(S1_BENIGN) + "\n")
+    assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
+
+
 @pytest.mark.requires_gitleaks
 def test_benign_fixture_tree_is_clean(root, fixture_tree):
     res = _scan(root, [root / "harvest" / "redacted"])
