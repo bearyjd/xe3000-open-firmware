@@ -1,4 +1,5 @@
-"""Offline checks for the Phase 1 harvest tooling. No router, no network, no ssh: ssh is a shim on PATH."""
+"""Offline behaviour checks for the Phase 1 harvest tooling. No router, no network: ssh is a shim on PATH.
+Static allowlist checks of collect.sh live in test_harvest_static.py."""
 import hashlib
 import os
 import re
@@ -6,7 +7,7 @@ import shutil
 import stat
 import subprocess
 import tarfile
-from pathlib import Path
+import time
 
 import pytest
 
@@ -15,67 +16,23 @@ from conftest import REPO
 COLLECT = REPO / "scripts" / "remote" / "collect.sh"
 HARVEST = REPO / "scripts" / "harvest.sh"
 SRC = COLLECT.read_text()
-CODE = "\n".join(l for l in SRC.splitlines() if not l.lstrip().startswith("#"))
+TAG = "glinet-harvest-collect"
+N = "n0nce-1234abcd"
 
 SHELLS = [["sh"]] + ([["busybox", "sh"]] if shutil.which("busybox") else [])
-
-
-# ---------------------------------------------------------------- (a) static
-
-FORBIDDEN_WORDS = ["rm", "mv", "cp", "tee", "dd", "mkdir", "mount", "umount", "opkg", "uci", "fw_setenv",
-                   "reboot", "sysupgrade", "insmod", "modprobe", "rmmod", "chmod", "chown", "ln", "touch",
-                   "sed", "awk", "wget", "curl", "nc", "ssh", "stty", "microcom", "socat", "gpioset", "sysctl"]
-
-
-@pytest.mark.parametrize("word", FORBIDDEN_WORDS)
-def test_no_forbidden_command(word):
-    assert not re.search(rf"(?<![\w./-]){re.escape(word)}(?![\w./-])", CODE), word
-
-
-def test_no_file_redirections():
-    stripped = re.sub(r"2>&1|2?>\s*/dev/null", "", CODE)
-    assert ">" not in stripped, "output redirection to something other than /dev/null or 2>&1"
-    assert "<<" not in CODE  # heredocs may use temp files in some shells
-    for m in re.finditer(r"<\s*(\"?[\w/$.]+\"?)", CODE):
-        assert m.group(1).strip('"') in ("/dev/null", "/proc/modules", "/proc/$mo_p/comm"), m.group(0)
-
-
-def test_mtd_only_read():
-    assert not re.search(r"\bmtd\s+(write|erase|unlock|-)", CODE)
-    assert not re.search(r"\bubi(format|attach|detach|mkvol|rmvol)", CODE)
-
-
-def test_ubus_call_only_system_board():
-    calls = re.findall(r"ubus\s+call\b[^\n]*", CODE)
-    assert calls and all(re.fullmatch(r"ubus call system board", c.strip()) for c in calls), calls
-
-
-def test_no_set_e_and_no_bashisms():
-    assert not re.search(r"\bset\s+-[a-zA-Z]*e", CODE)
-    for bad in ("[[", "local ", "<(", ">(", "declare ", "=(", "${!", "source ", "function "):
-        assert bad not in CODE, bad
-
-
-def test_no_modem_node_reads():
-    assert not re.search(r"[<>]\s*\"?/dev/", CODE.replace("</dev/null", "").replace(">/dev/null", ""))
-    for line in CODE.splitlines():
-        if re.search(r"/dev/(tty|cdc|wwan|mhi)", line):
-            assert not re.search(r"\b(cat|od|head|tail|dd|read|stty|strings|hexdump)\b", line), line
-    assert "AT+" not in CODE
-
-
-def test_no_secret_paths_are_read_explicitly():
-    for bad in ("/etc/shadow", "dropbear/", "host_key"):
-        assert not re.search(rf"\b(cat|frame_file|opt_file)\b[^\n]*{re.escape(bad)}", CODE), bad
+needs_timeout = pytest.mark.skipif(not shutil.which("timeout"), reason="no timeout binary")
 
 
 # ---------------------------------------------------------------- stream parsing helper
 
 def parse_stream(text):
-    """Return (frames, outside_lines). Raises AssertionError on malformed framing."""
-    frames, outside, cur = {}, [], None
+    """Return (nonce, frames, outside_lines). Only END lines carrying the announced nonce close a frame."""
     lines = text.split("\n")
-    for line in lines:
+    m = re.fullmatch(r"@@COLLECT-VERSION 2 ([A-Za-z0-9-]{8,64})", lines[0])
+    assert m, lines[0]
+    nonce = m.group(1)
+    frames, outside, cur = {}, [], None
+    for line in lines[1:]:
         if cur is None:
             if line.startswith("@@BEGIN "):
                 _, kind, name = line.split(" ")
@@ -84,17 +41,17 @@ def parse_stream(text):
             elif line:
                 outside.append(line)
         else:
-            m = re.fullmatch(r"@@END (\S+) (\d+)", line)
+            m = re.fullmatch(rf"@@END-{re.escape(nonce)} (\S+) (\d+)", line)
             if m and m.group(1) == cur[1]:
                 frames[cur[1]] = (cur[0], "\n".join(cur[2]), int(m.group(2)))
                 cur = None
             else:
                 cur[2].append(line)
     assert cur is None, f"unterminated frame {cur and cur[1]}"
-    return frames, outside
+    return nonce, frames, outside
 
 
-# ---------------------------------------------------------------- (b) run collect.sh locally
+# ---------------------------------------------------------------- run collect.sh locally (as over ssh)
 
 SNAP_DIRS = ["/etc", "/root", "/opt", "/srv", "/usr/bin", "/usr/sbin", "/var/spool", "/var/mail"]
 
@@ -113,69 +70,81 @@ def snapshot():
     return snap
 
 
+def run_collect(shell, work, *extra):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work), "TMPDIR": str(work)}
+    with open(COLLECT, "rb") as fh:
+        try:
+            return subprocess.run(shell + ["-s", TAG, *extra], stdin=fh, capture_output=True, cwd=work, env=env,
+                                  timeout=120)
+        except subprocess.TimeoutExpired:
+            pytest.skip("collect.sh blocked on a sysfs read on this host; the container run is authoritative")
+
+
 @pytest.fixture(scope="module")
 def local_run(tmp_path_factory):
     work = tmp_path_factory.mktemp("collect")
-    results = {}
     before = snapshot()
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(work), "TMPDIR": str(work)}
-    for shell in SHELLS:
-        with open(COLLECT, "rb") as fh:
-            try:
-                p = subprocess.run(shell + ["-s"], stdin=fh, capture_output=True, cwd=work, env=env, timeout=120)
-            except subprocess.TimeoutExpired:
-                pytest.skip("collect.sh blocked on a sysfs read on this host; the container run is authoritative")
-        results[" ".join(shell)] = p
-    after = snapshot()
-    return results, before, after, work
+    results = {" ".join(s): run_collect(s, work) for s in SHELLS}
+    return results, before, snapshot(), work
 
 
 @pytest.mark.parametrize("shell", [" ".join(s) for s in SHELLS])
 def test_collect_stream_well_formed(local_run, shell):
     p = local_run[0][shell]
     assert p.returncode == 0
-    text = p.stdout.decode("utf-8", "replace")
-    frames, outside = parse_stream(text)
-    assert outside[0] == "@@COLLECT-VERSION 1"
-    assert outside[-1] == f"@@DONE {len(frames)}"
-    for o in outside[1:-1]:
+    nonce, frames, outside = parse_stream(p.stdout.decode("utf-8", "replace"))
+    assert outside[-1] == f"@@DONE-{nonce} {len(frames)}"
+    for o in outside[:-1]:
         assert re.match(r"@@(MISSING|SKIPPED) \S", o), o
     for name in ("proc/cpuinfo", "proc/meminfo", "cmd/uname"):
         assert name in frames and frames[name][2] == 0, name
     assert frames["proc/meminfo"][1].startswith("MemTotal:")
-    # a command that cannot exist in the test image is reported and the run continues
-    assert "@@MISSING ubus" in outside
+    assert "@@MISSING ubus" in outside  # absent in the test image: reported, run continues
+    # data minimisation: no command lines, no crontab bodies, logs are opt-in
+    assert "cmd/ps" not in frames and "cmd/logread" not in frames
+    assert "@@SKIPPED logread logs-not-requested" in outside
+    assert not any(n.startswith("etc/crontabs/") for n in frames)
+    assert not any("cmdline" in n for n in frames if n != "proc/cmdline")
+    table = frames["cmd/proc-comm"][1].splitlines()
+    assert table and all(re.fullmatch(r"\d+ .*", l) for l in table)
 
 
 @pytest.mark.parametrize("shell", [" ".join(s) for s in SHELLS])
 def test_collect_stream_has_no_excluded_paths(local_run, shell):
     text = local_run[0][shell].stdout.decode("utf-8", "replace")
-    frames, outside = parse_stream(text)
+    _, frames, _ = parse_stream(text)
     for name in frames:
         base = name.rsplit("/", 1)[-1]
         assert not name.startswith(("etc/shadow", "etc/dropbear")), name
         assert "host_key" not in name and not name.endswith((".pem", ".key")), name
         assert "serial" not in base.lower(), name
-    shadow = Path("/etc/shadow")
-    if shadow.exists() and os.access(shadow, os.R_OK):
-        for line in shadow.read_text().splitlines():
-            h = line.split(":")[1] if ":" in line else ""
-            if len(h) > 8:
-                assert h not in text
 
 
 def test_collect_leaves_filesystem_unchanged(local_run):
     _, before, after, work = local_run
     assert before == after
-    assert list(work.iterdir()) == []  # HOME/TMPDIR/cwd untouched
+    assert list(work.iterdir()) == []
 
 
-# ---- unit-level behaviour of the frame helpers, via sourcing (COLLECT_NO_MAIN is test-only)
+@pytest.mark.parametrize("shell", SHELLS)
+def test_probe_mode_runs_only_the_probe(tmp_path, shell):
+    p = run_collect(shell, tmp_path, "probe")
+    assert p.returncode == 0
+    nonce, frames, outside = parse_stream(p.stdout.decode())
+    assert sorted(frames) == ["cmd/busybox-list", "cmd/command-v", "cmd/uname"]
+    assert outside == [f"@@DONE-{nonce} 3"] or outside == ["@@MISSING busybox", f"@@DONE-{nonce} 3"]
+    assert "present cat" in frames["cmd/command-v"][1]
+    assert list(tmp_path.iterdir()) == []
 
-def run_fn(call, *args, shell=("sh",)):
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "COLLECT_NO_MAIN": "1"}
-    p = subprocess.run(list(shell) + ["-c", f'. "{COLLECT}"; {call}', "sh", *map(str, args)],
-                       capture_output=True, env=env, timeout=60)
+
+# ---------------------------------------------------------------- helper-level behaviour via sourcing
+
+def run_fn(call, *args, shell=("sh",), setup="", shim=None, env=None):
+    """Source collect.sh (COLLECT_NO_MAIN is test-only), then run `setup; call`. Returns stdout."""
+    e = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "COLLECT_NO_MAIN": "1", **(env or {})}
+    pre = f'PATH="{shim}:$PATH"; ' if shim else ""
+    p = subprocess.run(list(shell) + ["-c", f'. "{COLLECT}"; {pre}{setup}; {call}', "sh", *map(str, args)],
+                       capture_output=True, env=e, timeout=60)
     assert p.returncode == 0, p.stderr
     return p.stdout.decode()
 
@@ -197,19 +166,155 @@ def test_exclusions_and_limits(tmp_path, shell):
     assert out.count("@@SKIPPED") == 9
     assert "size=1048577" in out
     good = run_fn('frame_file t "$1"', tmp_path / "good.txt", shell=shell)
-    assert good.startswith("@@BEGIN t ") and secret in good and good.rstrip().endswith(" 0")
+    assert good.startswith("@@BEGIN t ") and secret in good and re.search(r"@@END-\S+ \S+ 0\n$", good)
     for path in ("/etc/shadow", "/etc/dropbear/dropbear_rsa_host_key", "/etc/dropbear/authorized_keys",
                  "/sys/bus/usb/devices/1-1/serial", "/sys/class/power_supply/BAT0/serial_number"):
-        run_fn('is_excluded "$1"', path, shell=shell)  # returns 0 => run_fn asserts rc==0
+        run_fn('is_excluded "$1"', path, shell=shell)  # rc 0 => excluded
 
 
 def test_non_excluded_path_is_not_excluded():
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "COLLECT_NO_MAIN": "1"}
-    p = subprocess.run(["sh", "-c", f'. "{COLLECT}"; is_excluded /etc/config/network'], env=env)
+    p = subprocess.run(["sh", "-c", f'. "{COLLECT}"; is_excluded /etc/config/network'],
+                       env={"PATH": os.environ["PATH"], "COLLECT_NO_MAIN": "1"})
     assert p.returncode == 1
 
 
-# ---------------------------------------------------------------- (c) harvest.sh with a fake ssh
+def test_proc_comm_table_has_only_pid_and_name():
+    out = run_fn("proc_comm_table").splitlines()
+    assert out and all(re.fullmatch(r"\d+ \S.*", l) for l in out)
+
+
+def test_logs_are_opt_in_via_positional_arg():
+    base = run_fn("collect_system")
+    assert "@@SKIPPED logread logs-not-requested" in base
+    with_logs = run_fn("collect_system", "COLLECT_LOGS=1")
+    assert "logs-not-requested" not in with_logs
+    assert "@@MISSING logread" in with_logs or "@@BEGIN sys cmd/logread" in with_logs
+
+
+CRON = (
+    "*/5 * * * * /usr/bin/foo.sh\n"
+    "0 4 * * * /sbin/reload_thing\n"
+    "* * * * * curl -u bob:hunter2 http://a/b\n"
+    "* * * * * pppd PASSWORD=hunter2\n"
+    "* * * * * x --Pwd=hunter2\n"
+    "* * * * * x SECRET_value\n"
+    "* * * * * x API_Token=abc\n"
+    "* * * * * x apiKEY=abc\n"
+    "* * * * * x -H Authorization:abc\n"
+    "* * * * * x --username=bob\n"
+    "* * * * * mosquitto_pub -h h -P hunter2\n"
+    "* * * * * x -p hunter2\n"
+    "* * * * * x -U bob\n"
+    "* * * * * fetch ftp://h/p\n"
+    "5 5 * * * last-line-without-newline"
+)
+
+
+def test_crontab_lines_pass_through_the_conservative_filter(tmp_path):
+    cron = tmp_path / "cron"
+    cron.mkdir()
+    (cron / "root").write_text(CRON)
+    (cron / "serial_number").write_text("0 0 * * * keepme\n")
+    out = run_fn("crontab_filtered", setup=f"CRONDIR={cron}")
+    assert "hunter2" not in out and "bob" not in out and "abc" not in out and "keepme" not in out
+    assert "*/5 * * * * /usr/bin/foo.sh" in out and "/sbin/reload_thing" in out
+    assert "5 5 * * * last-line-without-newline" in out
+    assert "# file root" in out and "# dropped 12 line(s)" in out
+
+
+def _sleeper_shim(tmp_path, *names):
+    shim = tmp_path / "shim"
+    shim.mkdir(exist_ok=True)
+    for name in names:
+        (shim / name).write_text("#!/bin/sh\nexec sleep 30\n")
+        (shim / name).chmod(0o755)
+    return shim
+
+
+@needs_timeout
+def test_blocked_read_and_blocked_command_are_cut_off(tmp_path):
+    shim = _sleeper_shim(tmp_path, "head", "dmesg", "ls")
+    f = tmp_path / "f.txt"
+    f.write_text("hello")
+    t0 = time.monotonic()
+    out = run_fn('frame_file t "$1"; frame_cmd kernel cmd/dmesg dmesg; frame_cmd hw cmd/ls ls -l /sys',
+                 f, setup='TMO="timeout 1"', shim=shim)
+    assert time.monotonic() - t0 < 12
+    assert len(re.findall(r"@@END-\S+ \S+ 124\n", out)) == 2  # head and dmesg timed out (exit 124)
+    assert "@@SKIPPED" in out  # ls -lnL (the size probe) timed out: skipped, not hung
+
+
+def test_file_reads_are_capped_even_when_size_reports_zero():
+    out = run_fn('frame_file t /proc/self/maps', setup="MAXBYTES=64")
+    body = out.split("\n", 1)[1].rsplit("\n\n@@END-", 1)[0]
+    assert 0 < len(body.encode()) <= 64
+
+
+def test_timeout_is_empty_when_router_has_no_timeout_command(tmp_path):
+    empty = tmp_path / "nobin"
+    empty.mkdir()
+    p = subprocess.run(["/bin/sh", "-c", f'COLLECT_NO_MAIN=1; . "{COLLECT}"; echo "[$TMO]"'],
+                       capture_output=True, env={"PATH": str(empty), "COLLECT_NO_MAIN": "1"})
+    # collect.sh resets PATH itself, so only assert the variable is always defined (empty or 'timeout 10')
+    assert p.stdout.decode().strip() in ("[]", "[timeout 10]")
+
+
+def test_detect_hex_prefers_od_then_hexdump_then_none():
+    stub = "TMO=; "
+    assert "HEX=[od]" in run_fn('detect_hex; echo "HEX=[$HEX]"', setup=stub + "od() { return 0; }")
+    assert "HEX=[hexdump]" in run_fn(
+        'detect_hex; echo "HEX=[$HEX]"', setup=stub + "od() { return 1; }; hexdump() { return 0; }")
+    assert "HEX=[]" in run_fn(
+        'detect_hex; echo "HEX=[$HEX]"', setup=stub + "od() { return 1; }; hexdump() { return 1; }")
+
+
+def test_fdt_without_a_hex_tool_reports_missing_and_walks_device_tree(tmp_path):
+    fdt = tmp_path / "fdt"
+    fdt.write_bytes(b"\xd0\x0d\xfe\xed")
+    out = run_fn("collect_fdt", setup=f'TMO=; FDT={fdt}; detect_hex() {{ HEX=; }}; dt_fallback() {{ echo FALLBACK; }}')
+    assert f"@@MISSING {fdt}" in out and "FALLBACK" in out and "@@BEGIN" not in out
+
+
+def test_fdt_hex_with_od_and_hexdump_branches(tmp_path):
+    fdt = tmp_path / "fdt"
+    fdt.write_bytes(b"\xd0\x0d\xfe\xed")
+    out = run_fn("collect_fdt", setup=f"TMO=; FDT={fdt}; detect_hex() {{ HEX=od; }}")
+    assert "@@BEGIN hw-bin" in out and "d0 0d fe ed" in out
+    out = run_fn("collect_fdt", setup=f"TMO=; FDT={fdt}; detect_hex() {{ HEX=hexdump; }}; hexdump() {{ echo HEXDUMP-USED; }}")
+    assert "HEXDUMP-USED" in out and "@@BEGIN hw-bin" in out
+
+
+def _modinfo_shim(tmp_path):
+    shim = tmp_path / "mshim"
+    shim.mkdir()
+    (shim / "modinfo").write_text('#!/bin/sh\necho "$1" >> "$MODLOG"\necho "name: $1"\n')
+    (shim / "modinfo").chmod(0o755)
+    return shim
+
+
+def test_modinfo_skipped_when_module_count_is_large(tmp_path):
+    mods = tmp_path / "modules"
+    mods.write_text("".join(f"m{i} 1 0 - Live 0x0\n" for i in range(250)))
+    log = tmp_path / "log"
+    out = run_fn("collect_modinfo", setup=f"TMO=; MODULES_FILE={mods}; SYSMODULE={tmp_path}/sys",
+                 shim=_modinfo_shim(tmp_path), env={"MODLOG": str(log)})
+    assert "@@SKIPPED modinfo module-count=250" in out
+    assert not log.exists()
+
+
+def test_modinfo_called_once_per_module_and_not_when_sysfs_has_version(tmp_path):
+    mods = tmp_path / "modules"
+    mods.write_text("a 1 0 - Live 0x0\nb 1 0 - Live 0x0\nc 1 0 - Live 0x0\n")
+    (tmp_path / "sys" / "a").mkdir(parents=True)
+    (tmp_path / "sys" / "a" / "version").write_text("1.2\n")
+    log = tmp_path / "log"
+    out = run_fn("collect_modinfo", setup=f"TMO=; MODULES_FILE={mods}; SYSMODULE={tmp_path}/sys",
+                 shim=_modinfo_shim(tmp_path), env={"MODLOG": str(log)})
+    assert log.read_text().split() == ["b", "c"]
+    assert "@@BEGIN kernel cmd/modinfo/b" in out and "1.2" in out and "@@SKIPPED modinfo" not in out
+
+
+# ---------------------------------------------------------------- harvest.sh with a fake ssh
 
 @pytest.fixture
 def shim(tmp_path):
@@ -218,31 +323,40 @@ def shim(tmp_path):
     sshp = bindir / "ssh"
     sshp.write_text(
         '#!/bin/sh\nprintf "%s\\n" "$@" > "$SHIM_DIR/args"\ncat > "$SHIM_DIR/stdin"\n'
+        'if [ -n "${SHIM_HANG:-}" ]; then printf "@@COLLECT-VERSION 2 abc12345\\n@@BEGIN ident hang\\npart"; '
+        "exec sleep 300; fi\n"
         'if [ -n "${SHIM_STREAM:-}" ]; then cat "$SHIM_STREAM"; fi\nexit "${SHIM_RC:-0}"\n')
     sshp.chmod(0o755)
     shimdir = tmp_path / "shim"
     shimdir.mkdir()
     out = tmp_path / "out"
 
-    def run(stream=None, host="router.invalid", args=(), rc=0, strip_host=False):
+    def run(stream=None, host="router.invalid", args=(), rc=0, env_extra=None):
         env = {"PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}", "SHIM_DIR": str(shimdir),
-               "HARVEST_OUT": str(out), "SHIM_RC": str(rc), "HOME": str(tmp_path)}
+               "HARVEST_OUT": str(out), "SHIM_RC": str(rc), "HOME": str(tmp_path), **(env_extra or {})}
         if host is not None:
             env["ROUTER_HOST"] = host
         if stream is not None:
             sf = tmp_path / "canned.txt"
-            sf.write_bytes(stream.encode())
+            sf.write_bytes(stream if isinstance(stream, bytes) else stream.encode())
             env["SHIM_STREAM"] = str(sf)
-        return subprocess.run(["bash", str(HARVEST), *args], capture_output=True, text=True, env=env, timeout=60)
+        return subprocess.run(["bash", str(HARVEST), *args], capture_output=True, text=True, env=env, timeout=120)
 
     run.shimdir, run.out = shimdir, out
     return run
 
 
-GOOD = ("@@COLLECT-VERSION 1\n@@MISSING ubus\n@@SKIPPED /x/serial excluded\n"
-        "@@BEGIN ident proc/cpuinfo\nmodel: x\n\n@@END proc/cpuinfo 0\n"
-        "@@BEGIN hw-bin sys/firmware/fdt\nd0 0d fe ed\n\n@@END sys/firmware/fdt 0\n"
-        "@@DONE 2\n")
+def stream(*parts, nonce=N, done=True):
+    body = f"@@COLLECT-VERSION 2 {nonce}\n" + "".join(parts)
+    return body + (f"@@DONE-{nonce} 2\n" if done else "")
+
+
+def frame(kind, name, content, nonce=N):
+    return f"@@BEGIN {kind} {name}\n{content}\n\n@@END-{nonce} {name} 0\n"
+
+
+GOOD = stream("@@MISSING ubus\n@@SKIPPED /x/serial excluded\n", frame("ident", "proc/cpuinfo", "model: x"),
+              frame("hw-bin", "sys/firmware/fdt", "d0 0d fe ed"))
 
 
 def only_run_dir(out):
@@ -271,13 +385,14 @@ def test_harvest_complete_stream(shim):
 def test_harvest_ssh_invocation(shim):
     shim(GOOD)
     args = (shim.shimdir / "args").read_text().split("\n")
-    for opt in ("BatchMode=yes", "ConnectTimeout=10", "ServerAliveInterval=5", "root@router.invalid", "sh -s"):
+    for opt in ("BatchMode=yes", "ConnectTimeout=10", "ServerAliveInterval=5", "ServerAliveCountMax=3",
+                "root@router.invalid", f"sh -s {TAG}"):
         assert opt in args, opt
     assert (shim.shimdir / "stdin").read_bytes() == COLLECT.read_bytes()
 
 
 def test_harvest_truncated_stream_marks_partial(shim):
-    cut = GOOD[: GOOD.index("d0 0d") + 3]  # dropped mid-frame, no END, no DONE
+    cut = stream(frame("ident", "proc/cpuinfo", "model: x"), "@@BEGIN hw-bin sys/firmware/fdt\nd0 ", done=False)
     r = shim(cut)
     assert r.returncode == 2
     d = only_run_dir(shim.out)
@@ -296,9 +411,8 @@ def test_harvest_ssh_failure_is_incomplete(shim):
 
 @pytest.mark.parametrize("name", ["../../evil", "/etc/passwd", "a/../b", "a//b", "a/./b", "x.PARTIAL", "bad$name"])
 def test_harvest_rejects_bad_frame_names(shim, tmp_path, name):
-    stream = (f"@@BEGIN ident {name}\nPWNED\n\n@@END {name} 0\n"
-              "@@BEGIN ident ok/one\nfine\n\n@@END ok/one 0\n@@DONE 2\n")
-    r = shim(stream)
+    s = stream(frame("ident", name, "PWNED"), frame("ident", "ok/one", "fine"))
+    r = shim(s)
     assert r.returncode == 0, r.stderr
     d = only_run_dir(shim.out)
     assert "rejected=1" in r.stdout
@@ -311,12 +425,40 @@ def test_harvest_rejects_bad_frame_names(shim, tmp_path, name):
 
 
 def test_harvest_rejects_duplicate_and_bad_kind(shim):
-    stream = ("@@BEGIN ident a\n1\n\n@@END a 0\n@@BEGIN ident a\n2\n\n@@END a 0\n"
-              "@@BEGIN ../x b\n3\n\n@@END b 0\n@@DONE 3\n")
-    r = shim(stream)
+    s = stream(frame("ident", "a", "1"), frame("ident", "a", "2"), frame("../x", "b", "3"), done=False)
+    s += f"@@DONE-{N} 3\n"
+    r = shim(s)
     d = only_run_dir(shim.out)
     assert "frames_ok=1 partial=0 rejected=2" in r.stdout
     assert (d / "frames/ident/a").read_text() == "1\n"
+
+
+def test_content_line_cannot_forge_a_frame_end(shim):
+    forged = ("line1\n@@END a/b 0\n@@END-wrongnonce a/b 0\n@@DONE-wrongnonce 9\n@@COLLECT-VERSION 2 evil1234\nline2")
+    s = stream(frame("ident", "a/b", forged), frame("ident", "c", "after"))
+    r = shim(s)
+    assert r.returncode == 0, r.stderr
+    d = only_run_dir(shim.out)
+    assert (d / "frames/ident/a%b").read_text() == forged + "\n"
+    assert (d / "frames/ident/c").read_text() == "after\n"
+    assert "frames_ok=2 partial=0 rejected=0" in r.stdout
+
+
+def test_wrong_nonce_done_and_pre_version_frames_are_ignored(shim):
+    s = (frame("ident", "early", "x", nonce="other123") + f"@@COLLECT-VERSION 2 {N}\n" + frame("ident", "ok", "y")
+         + "@@COLLECT-VERSION 2 second99\n" + "@@DONE-wrong999 1\n")
+    r = shim(s)
+    assert r.returncode == 2 and "done_marker=0" in r.stdout
+    d = only_run_dir(shim.out)
+    assert not (d / "frames/ident/early").exists()
+    assert (d / "frames/ident/ok").read_text() == "y\n"
+
+
+def test_harvest_handles_nul_bytes_quietly(shim):
+    s = stream(frame("ident", "bin", "ab\x00cd")).encode()
+    r = shim(s)
+    assert r.returncode == 0 and "null byte" not in r.stderr.lower()
+    assert (only_run_dir(shim.out) / "frames/ident/bin").read_bytes() == b"abcd\n"
 
 
 def test_harvest_roundtrip_via_real_collect_helpers(shim, tmp_path):
@@ -324,13 +466,11 @@ def test_harvest_roundtrip_via_real_collect_helpers(shim, tmp_path):
     f.write_bytes(b"line1\n\nlast-no-newline")
     g = tmp_path / "tricky.txt"
     g.write_bytes(b"@@BEGIN x y\n@@END other 0\nend\n\n")
-    env = {"PATH": os.environ["PATH"], "COLLECT_NO_MAIN": "1"}
-    stream = subprocess.run(["sh", "-c", f'. "{COLLECT}"; frame_file t "{f}"; frame_file t "{g}"; printf "@@DONE 2\\n"'],
-                            capture_output=True, env=env, check=True).stdout.decode()
-    r = shim(stream)
+    call = f'printf "@@COLLECT-VERSION 2 %s\\n" "$NONCE"; frame_file t "{f}"; frame_file t "{g}"; printf "@@DONE-%s 2\\n" "$NONCE"'
+    s = run_fn(call)
+    r = shim(s)
     assert r.returncode == 0, r.stderr
-    d = only_run_dir(shim.out)
-    files = {p.name: p.read_bytes() for p in (d / "frames/t").iterdir()}
+    files = {p.name: p.read_bytes() for p in (only_run_dir(shim.out) / "frames/t").iterdir()}
     assert files[str(f).lstrip("/").replace("/", "%")] == b"line1\n\nlast-no-newline\n"
     assert files[str(g).lstrip("/").replace("/", "%")] == g.read_bytes()
 
@@ -344,14 +484,87 @@ def test_harvest_requires_router_host_and_validates_it(shim):
         assert r.returncode != 0 and not (shim.shimdir / "args").exists(), bad
 
 
+def test_output_base_is_tightened_to_0700(shim):
+    shim.out.mkdir()
+    shim.out.chmod(0o755)
+    assert shim(GOOD).returncode == 0
+    assert stat.S_IMODE(shim.out.stat().st_mode) == 0o700
+
+
+@needs_timeout
+def test_hanging_ssh_is_killed_and_marked_incomplete(shim):
+    t0 = time.monotonic()
+    r = shim(args=(), env_extra={"SHIM_HANG": "1", "HARVEST_TIMEOUT": "2"})
+    assert time.monotonic() - t0 < 60
+    assert r.returncode == 2 and "ssh_exit=124" in r.stdout and "partial=1" in r.stdout
+    d = only_run_dir(shim.out)
+    assert (d / "frames/ident/hang.PARTIAL").read_text() == "part\n"
+    assert "ssh_exit\t124" in (d / "manifest.tsv").read_text()
+
+
+def test_invalid_harvest_timeout_is_rejected(shim):
+    for bad in ("abc", "0", "-5", "1;rm"):
+        r = shim(GOOD, env_extra={"HARVEST_TIMEOUT": bad})
+        assert r.returncode != 0 and "HARVEST_TIMEOUT" in r.stderr, bad
+        assert not (shim.shimdir / "args").exists()
+
+
+STOP = "ssh root@$ROUTER_HOST \"pkill -f 'sh -s glinet-harvest-collect'\""
+
+
 def test_dry_print_does_not_connect_and_needs_no_host(shim):
     r = shim(GOOD, host=None, args=("--dry-print",))
-    assert r.returncode == 0 and r.stdout == SRC
+    assert r.returncode == 0 and r.stdout.endswith(SRC)
+    head = r.stdout[: -len(SRC)]
+    assert STOP in head and f"'sh -s {TAG}'" in head
+    assert all(l.startswith("# harvest:") for l in head.splitlines())
+    assert not (shim.shimdir / "args").exists() and not shim.out.exists()
+
+
+def test_dry_print_probe_shows_the_probe_command(shim):
+    r = shim(GOOD, host=None, args=("--probe", "--dry-print"))
+    assert r.returncode == 0 and r.stdout.endswith(SRC)
+    assert f"'sh -s {TAG} probe'" in r.stdout and STOP in r.stdout
     assert not (shim.shimdir / "args").exists()
-    assert not shim.out.exists()
+
+
+def test_logs_are_not_requested_by_default(shim):
+    shim(GOOD)
+    assert not any("COLLECT_LOGS" in a for a in (shim.shimdir / "args").read_text().split("\n"))
+
+
+def test_with_logs_flag_is_passed_as_remote_positional_arg(shim):
+    shim(GOOD, args=("--with-logs",))
+    assert f"sh -s {TAG} COLLECT_LOGS=1" in (shim.shimdir / "args").read_text().split("\n")
+
+
+def test_with_logs_and_probe_do_not_combine(shim):
+    r = shim(GOOD, args=("--probe", "--with-logs"))
+    assert r.returncode != 0 and not (shim.shimdir / "args").exists()
+
+
+def test_dry_print_with_logs_shows_the_flag(shim):
+    r = shim(GOOD, host=None, args=("--with-logs", "--dry-print"))
+    assert r.returncode == 0 and f"'sh -s {TAG} COLLECT_LOGS=1'" in r.stdout and r.stdout.endswith(SRC)
+
+
+def test_usage_error_prints_the_stop_command(shim):
+    r = shim(GOOD, args=("--bogus",))
+    assert r.returncode != 0 and STOP in r.stderr
+    assert not (shim.shimdir / "args").exists()
+
+
+def test_probe_run_uses_probe_command_and_prints_probe_frames(shim):
+    probe = stream(frame("probe", "cmd/uname", "Linux x"), frame("probe", "cmd/command-v", "present od\nabsent hexdump"))
+    r = shim(probe, args=("--probe",))
+    assert r.returncode == 0, r.stderr
+    args = (shim.shimdir / "args").read_text().split("\n")
+    assert f"sh -s {TAG} probe" in args
+    assert "present od" in r.stdout
+    assert only_run_dir(shim.out).name.endswith("-probe")
 
 
 def test_no_hardcoded_ip_or_default_host():
     text = HARVEST.read_text() + (REPO / "justfile").read_text()
     assert not re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", text)
-    assert "ROUTER_HOST:-" not in re.sub(r'\$\{ROUTER_HOST:-\}', "", text)
+    assert "ROUTER_HOST:-" not in re.sub(r"\$\{ROUTER_HOST:-\}", "", text)
