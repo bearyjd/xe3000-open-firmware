@@ -703,3 +703,47 @@ def test_harvest_default_out_is_raw(shim):
     r = subprocess.run(["bash", str(shim.repo / "scripts" / "harvest.sh"), "--dry-print"],
                        capture_output=True, text=True, env={**env, "ROUTER_HOST": "router.invalid"}, timeout=30)
     assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------------------------- artifact writes never follow planted symlinks
+
+FIXED_TS = "20300101T000000Z"
+
+
+def _fixed_date(tmp_path):
+    d = tmp_path / "bin" / "date"
+    d.write_text(f'#!/bin/sh\necho {FIXED_TS}\n')
+    d.chmod(0o755)
+
+
+@pytest.mark.parametrize("suffix", [".tar", ".tar.sha256"])
+@pytest.mark.parametrize("dangling", [False, True])
+def test_artifact_symlink_destinations_are_never_followed(shim, tmp_path, suffix, dangling):
+    _fixed_date(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "victim"
+    if not dangling:
+        victim.write_text("ORIGINAL")
+    shim.out.mkdir(parents=True)
+    (shim.out / f"{FIXED_TS}{suffix}").symlink_to(victim)
+    r = shim(GOOD)
+    assert r.returncode != 0
+    assert (victim.read_text() == "ORIGINAL") if not dangling else not victim.exists()
+    assert list(outside.iterdir()) == ([victim] if not dangling else [])
+
+
+def test_artifacts_are_created_private_and_not_overwritten(shim, tmp_path):
+    _fixed_date(tmp_path)
+    shim.out.mkdir(parents=True)
+    pre = shim.out / f"{FIXED_TS}.tar"
+    pre.write_text("PRE-EXISTING")
+    assert shim(GOOD).returncode != 0
+    assert pre.read_text() == "PRE-EXISTING"
+
+
+def test_artifacts_have_mode_0600(shim):
+    assert shim(GOOD).returncode == 0
+    d = only_run_dir(shim.out)
+    for n in (f"{d.name}.tar", f"{d.name}.tar.sha256"):
+        assert stat.S_IMODE((shim.out / n).stat().st_mode) == 0o600
