@@ -30,7 +30,8 @@ def always_good(i, messages):
 
 
 def run_cli(root, client, *extra, run_id="r1"):
-    argv = ["--root", str(root), "--run-id", run_id, *extra]
+    # fixture runs opt in explicitly: allow everything and skip the canary (tests of the layers use cli.main directly)
+    argv = ["--root", str(root), "--run-id", run_id, "--allow-extra", "**", "--no-canary", *extra]
     return cli.main(argv, client_factory=lambda: client)
 
 
@@ -364,7 +365,7 @@ def test_batch_wait_times_out(stamped):
             return "in_progress"
     cfg = runner.RunConfig(root=stamped, inputs=(stamped / "harvest" / "redacted", stamped / "unpacked"),
                            run_id="t", model=cost.DEFAULT_MODEL, max_usd=5, batch=True,
-                           batch_poll_seconds=10, batch_timeout_seconds=25)
+                           batch_poll_seconds=10, batch_timeout_seconds=25, allow_extra=("**",), no_canary=True)
     slept = []
     with pytest.raises(runner.RunFailed, match="timed out"):
         runner.run(cfg, lambda: Never(script=always_good), out=lambda _l: None, sleep=slept.append)
@@ -535,7 +536,7 @@ def _cfg(root, **kw):
     from recon import runner
     return runner.RunConfig(root=root, inputs=(root / "harvest" / "redacted", root / "unpacked"), run_id="t",
                             model=cost.DEFAULT_MODEL, max_usd=5, batch=True, batch_poll_seconds=1,
-                            batch_timeout_seconds=2, **kw)
+                            batch_timeout_seconds=2, allow_extra=("**",), no_canary=True, **kw)
 
 
 def test_resume_polls_existing_batch_without_creating_a_new_one(stamped):

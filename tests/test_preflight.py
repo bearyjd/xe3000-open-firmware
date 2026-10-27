@@ -268,6 +268,57 @@ def test_gitleaks_stays_quiet_on_benign_labels(root):
     assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
 
 
+def _urlpw():
+    return "https://bob:" + "Zq7pw" + "xyQ9@ddns.example.com/nic"
+
+
+R2_LINES = [
+    _urlpw(),
+    "curl -s -u root:" + "Zq7pw" + "xyQ9 http://192.168.8.1/rpc",
+    "curl --user admin:" + "Zq7pw" + "xyQ9 https://x",
+    "sshpass -p " + "Zq7pw" + "xyQ9 ssh root@h",
+    "mosquitto_pub -h h -u bob -P " + "Zq7pw" + "xyQ9 -t x",
+    "wget --password " + "Zq7pw" + "xyQ9 http://h",
+    "pppd call x user bob password " + "Zq7pw" + "xyQ9",
+    "echo 'root:" + "Zq7pw" + "xyQ9' | chpasswd",
+    "state " + "ab" * 32,
+    "password => '" + "Zq7pw" + "xyQ9'",
+    "password:: " + "Zq7pw" + "xyQ9",
+    "password：" + "Zq7pw" + "xyQ9",
+    "password\t" + "Zq7pw" + "xyQ9",
+    "wpa_passphrase=correct horse battery staple",
+    ": PSK \"" + "Zq7pw" + "xyQ9\"",
+    "00:11:22:33:44:55 " + "Zq7pw" + "xyQ9",
+    "<PreSharedKey>" + "Zq7pw" + "xyQ9</PreSharedKey>",
+    '<input type="password" name="pw" value="' + "Zq7pw" + 'xyQ9">',
+    "AT+CPIN=\"4321\"",
+    '{"pwd": "' + "Zq7pw" + 'xyQ9"}',
+    '{"params":\n [ "' + "ab12" * 8 + '", "x"]}',
+    "<secret>\n" + "ab12" * 8 + "\n</secret>",
+    "-----BEGIN OpenVPN Static key V1-----\n" + "0123456789abcdef" * 2 + "\n-----END OpenVPN Static key V1-----",
+    "data " + "cm9vdDpUcjB1YjRkb3ImM3h5ejEyMzQ1Njc4OTA" + "=",
+]
+R2_BENIGN = ["mkdir -p /tmp/x", "ps -p 123", "ssh -p 2222 host", "see https://example.com:8080/path", "AT+QGPIO=1,26",
+             "sha1 " + "ab" * 20, "<ssid>Home</ssid>", "gpio-keys: gpio: 527", '"auth": {"key": "Integer"}',
+             "ubus call modem get_info"]
+
+
+@pytest.mark.requires_gitleaks
+@pytest.mark.parametrize("line", R2_LINES, ids=[l[:30] for l in R2_LINES])
+def test_gitleaks_has_independent_rules_for_the_review_forms(root, line):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text(line + "\n")  # raw, never redacted
+    res = _scan(root, [root / "harvest" / "redacted"])
+    assert res.stamp is None and {h.file for h in res.hits} == {"redacted/etc/x.txt"}, res.hits
+
+
+@pytest.mark.requires_gitleaks
+def test_gitleaks_stays_quiet_on_review_benign_lines(root):
+    (root / "harvest" / "redacted" / "etc").mkdir(parents=True)
+    (root / "harvest" / "redacted" / "etc" / "x.txt").write_text("\n".join(R2_BENIGN) + "\n")
+    assert _scan(root, [root / "harvest" / "redacted"]).hits == ()
+
+
 @pytest.mark.requires_gitleaks
 def test_benign_fixture_tree_is_clean(root, fixture_tree):
     res = _scan(root, [root / "harvest" / "redacted"])

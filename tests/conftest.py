@@ -8,6 +8,17 @@ import pytest
 
 from fakes import FakeClient
 
+class Lazy:
+    """Module proxy resolved on first attribute access, so a missing module fails its tests, not collection."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    def __getattr__(self, attr):
+        import importlib
+        return getattr(importlib.import_module(self._name), attr)
+
+
 REPO = Path(__file__).resolve().parent.parent
 GITLEAKS_TOML = REPO / "containers" / "gitleaks.toml"
 CFG = {"gitleaks_bin": os.environ.get("RECON_GITLEAKS_BIN") or shutil.which("gitleaks")}
@@ -28,8 +39,9 @@ def root(tmp_path) -> Path:
     base = tmp_path / "repo"
     for sub in ("harvest/raw", "harvest/redacted", "unpacked", "cache", "findings/raw", "containers"):
         (base / sub).mkdir(parents=True)
-    for name in ("gitleaks.toml", "gitleaks.image"):
-        shutil.copy(REPO / "containers" / name, base / "containers" / name)
+    for name in ("gitleaks.toml", "gitleaks.image", "recon-allowlist.txt"):
+        if (REPO / "containers" / name).exists():
+            shutil.copy(REPO / "containers" / name, base / "containers" / name)
     return base
 
 
