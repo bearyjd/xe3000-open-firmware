@@ -11,8 +11,8 @@
 #
 # HARVEST_TIMEOUT (seconds, default 600) bounds the whole ssh session. Prints only counts and paths.
 # Nothing but `sh -s glinet-harvest-collect ...` ever runs on the router. A stuck run can be stopped with
-#   ssh root@$ROUTER_HOST "pkill -f 'sh -s glinet-harvest-collect'"
-# which this script prints but never runs by itself.
+#   ssh root@$ROUTER_HOST "pkill -f '[s]h -s glinet-harvest-collect'"
+# (bracket form: the pattern does not match the shell that runs pkill). This script prints it but never runs it.
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -28,7 +28,7 @@ VERSION_RE='^@@COLLECT-VERSION 2 ([A-Za-z0-9-]{8,64})$'
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
 
 stop_hint() {
-  printf '%s\n' "# harvest: stop a stuck run with (never run automatically): ssh root@\$ROUTER_HOST \"pkill -f 'sh -s glinet-harvest-collect'\""
+  printf '%s\n' "# harvest: stop a stuck run with (never run automatically): ssh root@\$ROUTER_HOST \"pkill -f '[s]h -s glinet-harvest-collect'\""
 }
 
 usage() {
@@ -62,7 +62,7 @@ valid_name() {
 split_stream() {
   local stream=$1 frames=$2 manifest=$3
   local line nonce="" in_frame=0 discard=0 have_prev=0 prev="" fkind="" fname="" fpath="" tag extra reason rest
-  n_ok=0 n_partial=0 n_rej=0 n_missing=0 n_skipped=0 saw_done=0
+  n_ok=0 n_partial=0 n_rej=0 n_missing=0 n_skipped=0 n_capped=0 n_notimeout=0 saw_done=0
 
   while IFS= read -r line || [[ -n $line ]]; do
     if [[ -z $nonce ]]; then
@@ -79,6 +79,11 @@ split_stream() {
             exec 3>&-
             n_ok=$((n_ok + 1))
             printf 'OK\t%s\t%s\texit=%s\n' "$fkind" "$fname" "${BASH_REMATCH[2]}" >>"$manifest"
+            # 124 = coreutils timeout, 143 = BusyBox timeout (exec'd, SIGTERM): the command was cut off.
+            if [[ ${BASH_REMATCH[2]} == 124 || ${BASH_REMATCH[2]} == 143 ]]; then
+              n_capped=$((n_capped + 1))
+              printf 'CAPPED\t%s\t%s\t%s\n' "$fkind" "$fname" "${BASH_REMATCH[2]}" >>"$manifest"
+            fi
           fi
           in_frame=0 discard=0 have_prev=0 prev=""
           continue
@@ -115,7 +120,9 @@ split_stream() {
       '@@MISSING '*)
         n_missing=$((n_missing + 1)); printf 'MISSING\t%s\n' "$(clean "${line#@@MISSING }")" >>"$manifest" ;;
       '@@SKIPPED '*)
-        n_skipped=$((n_skipped + 1)); printf 'SKIPPED\t%s\n' "$(clean "${line#@@SKIPPED }")" >>"$manifest" ;;
+        n_skipped=$((n_skipped + 1)); printf 'SKIPPED\t%s\n' "$(clean "${line#@@SKIPPED }")" >>"$manifest"
+        if [[ $line == *' no-timeout' ]]; then n_notimeout=$((n_notimeout + 1)); fi
+        ;;
       "@@DONE-$nonce "*) saw_done=1 ;;
       *) ;;
     esac
@@ -186,14 +193,21 @@ main() {
   tar -C "$OUT_BASE" -cf "$OUT_BASE/$ts$suffix.tar" "$ts$suffix"
   (cd "$OUT_BASE" && sha256sum "$ts$suffix.tar" >"$ts$suffix.tar.sha256")
 
-  printf 'frames_ok=%s partial=%s rejected=%s missing=%s skipped=%s done_marker=%s ssh_exit=%s\n' \
-    "$n_ok" "$n_partial" "$n_rej" "$n_missing" "$n_skipped" "$saw_done" "$ssh_rc"
+  printf 'frames_ok=%s partial=%s rejected=%s missing=%s skipped=%s capped=%s done_marker=%s ssh_exit=%s\n' \
+    "$n_ok" "$n_partial" "$n_rej" "$n_missing" "$n_skipped" "$n_capped" "$saw_done" "$ssh_rc"
   printf 'dir=%s\ntar=%s\nsha256=%s\n' "$dir" "$OUT_BASE/$ts$suffix.tar" "$OUT_BASE/$ts$suffix.tar.sha256"
   if ((probe)); then
     local f
     for f in "$frames"/probe/*; do
       [[ -f $f ]] && cat -- "$f"
     done
+  fi
+  if ((n_notimeout > 0)); then
+    printf 'NOTICE\tno-timeout\n' >>"$manifest"
+    printf "NOTICE: the router has no 'timeout' applet, so the hwmon, thermal, power_supply and debugfs gpio reads were skipped to avoid hangs\n" >&2
+  fi
+  if ((n_capped > 0)); then
+    printf 'NOTICE: %s frame(s) were capped by the per-read timeout (exit 124/143); their content is truncated\n' "$n_capped" >&2
   fi
   if ((ssh_rc != 0 || n_partial > 0 || saw_done == 0)); then
     printf 'INCOMPLETE: do not treat this harvest as whole (see manifest.tsv)\n' >&2

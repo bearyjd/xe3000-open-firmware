@@ -4,7 +4,7 @@
 #   ssh root@HOST 'sh -s glinet-harvest-collect probe' < collect.sh    capability probe only
 #   ssh root@HOST 'sh -s glinet-harvest-collect COLLECT_LOGS=1' < collect.sh   also snapshot logread (opt-in)
 # The first argument is only a tag so the run can be found and stopped:
-#   ssh root@HOST "pkill -f 'sh -s glinet-harvest-collect'"
+#   ssh root@HOST "pkill -f '[s]h -s glinet-harvest-collect'"   (bracket form: does not match its own shell)
 #
 # STRICTLY READ-ONLY. No file is written, no /tmp, no mount, no module load, no AT traffic, no modem node is
 # opened. The only ubus call is `system board`. Every command has stdin from /dev/null so it cannot consume
@@ -18,7 +18,7 @@
 #   @@BEGIN <kind> <name>  ...content...  (blank line)  @@END-<nonce> <name> <exit>
 #   @@MISSING <cmd> / @@SKIPPED <path> <reason>   (outside frames)
 #   @@DONE-<nonce> <frames>
-# A frame without @@END (dropped connection) is PARTIAL; no @@DONE = incomplete run. Exit 124 = capped by timeout.
+# A frame without @@END (dropped connection) is PARTIAL; no @@DONE = incomplete run. Exit 124 (coreutils) or 143 (BusyBox timeout exec's and reports SIGTERM) = that command was capped by timeout.
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LC_ALL=C
@@ -160,7 +160,7 @@ modem_ports() {
 # Owners: /proc/<pid>/fd/<n> symlink targets that point at modem nodes, plus the owning process name (comm).
 modem_owners() {
   for mo_f in /proc/[0-9]*/fd/*; do
-    mo_t=$(readlink "$mo_f" 2>/dev/null </dev/null)
+    mo_t=$($TMO readlink "$mo_f" 2>/dev/null </dev/null)
     case $mo_t in
       /dev/ttyUSB*|/dev/ttyACM*|/dev/cdc-wdm*|/dev/wwan*|/dev/mhi*)
         mo_p=${mo_f#/proc/}
@@ -187,7 +187,8 @@ proc_comm_table() {
 }
 
 # Crontab lines, but only after a conservative filter: any line containing pass, pwd, secret, token, key, auth,
-# user, '-u ', '-p ' (either case for the flags) or '://' is dropped and only counted.
+# user, '-u ', '-p ' (either case, with or without a following space), '://', or an assignment whose name looks
+# like PW/PSK/API is dropped and only counted.
 crontab_filtered() {
   for ct_f in "$CRONDIR"/*; do
     [ -f "$ct_f" ] || continue
@@ -196,7 +197,7 @@ crontab_filtered() {
     ct_drop=0
     while IFS= read -r ct_l || [ -n "$ct_l" ]; do
       case $ct_l in
-        *[Pp][Aa][Ss][Ss]*|*[Pp][Ww][Dd]*|*[Ss][Ee][Cc][Rr][Ee][Tt]*|*[Tt][Oo][Kk][Ee][Nn]*|*[Kk][Ee][Yy]*|*[Aa][Uu][Tt][Hh]*|*[Uu][Ss][Ee][Rr]*|*"-u "*|*"-p "*|*"-U "*|*"-P "*|*://*)
+        *[Pp][Aa][Ss][Ss]*|*[Pp][Ww][Dd]*|*[Ss][Ee][Cc][Rr][Ee][Tt]*|*[Tt][Oo][Kk][Ee][Nn]*|*[Kk][Ee][Yy]*|*[Aa][Uu][Tt][Hh]*|*[Uu][Ss][Ee][Rr]*|*"-u "*|*"-p "*|*"-U "*|*"-P "*|*-[pPuU][!\ ]*|*://*|*[Pp][Ww]*=*|*[Pp][Ss][Kk]*=*|*[Aa][Pp][Ii]*=*)
           ct_drop=$((ct_drop + 1)) ;;
         *) printf '%s\n' "$ct_l" ;;
       esac
@@ -268,6 +269,19 @@ collect_hardware() {
     done
   done
   frame_cmd hw cmd/ls-gpio ls -l /sys/class/gpio
+  collect_hw_risky
+}
+
+# hwmon, thermal, power_supply and debugfs gpio reads can block in the kernel. Without a `timeout` applet there is no
+# per-read cap, so they are skipped entirely rather than risk hanging the run.
+collect_hw_risky() {
+  if [ -z "$TMO" ]; then
+    skipped /sys/class/hwmon no-timeout
+    skipped /sys/class/thermal no-timeout
+    skipped /sys/class/power_supply no-timeout
+    skipped /sys/kernel/debug/gpio no-timeout
+    return 0
+  fi
   if [ -f /sys/kernel/debug/gpio ]; then
     frame_file hw /sys/kernel/debug/gpio
   else
@@ -380,7 +394,7 @@ probe_busybox() {
 }
 
 probe_commands() {
-  for pc_c in od hexdump timeout head readlink ls netstat logread lsmod modinfo dmesg ubus date cat busybox grep; do
+  for pc_c in od hexdump timeout head readlink ls netstat logread lsmod modinfo dmesg ubus date cat busybox grep pkill pgrep; do
     if command -v "$pc_c" >/dev/null 2>&1; then printf 'present %s\n' "$pc_c"; else printf 'absent %s\n' "$pc_c"; fi
   done
   return 0
