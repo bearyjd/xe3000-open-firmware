@@ -6,10 +6,15 @@ The XE3000 is the production home router. Do not start unless you can live witho
 
 ## Principles
 
-- The bootloader (U-Boot) stays untouched. Only the firmware (kernel and rootfs) is ever replaced, so the stock U-Boot web recovery is always available as the way back.
+- The bootloader (U-Boot) is left untouched by this runbook. Only the firmware (kernel and rootfs) is replaced. That does not make recovery guaranteed: see the next section.
+- Never flash until a full eMMC backup (every partition, including bootloader/FIP and factory data) has been taken and verified as described in section 2. If the backup is not verified, do not flash.
 - Back up the eMMC before anything else, and verify the backup.
 - Never run `fw_setenv`, never write the bootloader, preloader or FIP partitions, never change partition tables.
 - Keep the stock firmware image for the installed version (GL.iNet 4.8.3 at the time of writing) on the laptop, with its published checksum.
+
+## Known U-Boot recovery defect (read before anything else)
+
+Upstream OpenWrt documents a GL.iNet U-Boot startup/recovery defect on the MT2500, X3000 and XE3000 family (see the OpenWrt device page for the GL.iNet GL-X3000/XE3000, https://openwrt.org/toh/gl.inet/gl-x3000, and the GL-MT2500 page, https://openwrt.org/toh/gl.inet/gl-mt2500). On affected units the stock U-Boot can fail to start or to enter web recovery. This project has not tested recovery on this unit. The web recovery path below may not work, and there is no guarantee of recovery. Treat every flash as potentially unrecoverable without a serial console or an external eMMC programmer, and re-read the upstream page for current details before starting. A verified full backup limits the damage but cannot be guaranteed to restore a router that no longer reaches U-Boot.
 
 ## 1. Before you touch anything
 
@@ -40,7 +45,7 @@ Store the backup somewhere off the router. The backup contains device-unique dat
 
 ## 4. Rollback
 
-1. Enter U-Boot web recovery again (section 3, steps 1 and 2).
+1. Enter U-Boot web recovery again (section 3, steps 1 and 2). This may not work if the U-Boot defect above applies to your unit.
 2. Upload the stock firmware image, after checking its `sha256sum` against the published value.
 3. Boot, confirm the stock UI and the modem come up, and reconfigure from the vendor backup.
 4. If the router does not enter recovery at all, stop. Do not attempt to reflash the bootloader. Use the eMMC backup and a serial console, and ask for help with the backup checksums in hand.
