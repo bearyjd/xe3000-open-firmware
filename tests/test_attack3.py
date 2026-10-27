@@ -7,6 +7,7 @@ from recon import redact
 
 @pytest.mark.parametrize("cid,text,secret,note", CASES, ids=[c[0] for c in CASES])
 def test_round3_case_does_not_leak(cid, text, secret, note):
+    assert secret in text, "vacuous case: the needle is not in the input"
     out = redact.redact_text(text, salt="x")[0]
     assert secret not in out, out
 

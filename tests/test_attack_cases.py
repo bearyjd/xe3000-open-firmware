@@ -20,6 +20,7 @@ for label, text, secret in CASES:
 def test_adversarial_case_does_not_leak(text, secret, variant):
     s = SECRET_SETS[variant]
     raw, needle = render(text, s), render(secret, s)
+    assert needle in raw, "vacuous case: the needle is not in the input"
     out, counts = redact.redact_text(raw, salt="x")
     assert needle not in out, out
     assert sum(counts.values()) >= 1
