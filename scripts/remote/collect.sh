@@ -211,9 +211,9 @@ crontab_filtered() {
 detect_hex() {
   HEX=
   if command -v od >/dev/null 2>&1 && $TMO od -An -tx1 /dev/null >/dev/null 2>&1; then
-    HEX=od
+    HEX="od"
   elif command -v hexdump >/dev/null 2>&1 && $TMO hexdump -v -e '16/1 "%02x " "\n"' /dev/null >/dev/null 2>&1; then
-    HEX=hexdump
+    HEX="hexdump"
   fi
 }
 
@@ -313,7 +313,7 @@ collect_hw_risky() {
 # is sane (a router with hundreds of modules would otherwise fork hundreds of times).
 collect_modinfo() {
   km_n=0
-  while read -r km_m km_rest; do
+  while read -r km_m _; do
     km_n=$((km_n + 1))
   done < "$MODULES_FILE"
   km_has=
@@ -322,7 +322,7 @@ collect_modinfo() {
     skipped modinfo "module-count=$km_n"
     km_has=
   fi
-  while read -r km_m km_rest; do
+  while read -r km_m _; do
     case $km_m in ''|*[!A-Za-z0-9_-]*) continue ;; esac
     if [ -n "$km_has" ] && [ ! -e "$SYSMODULE/$km_m/version" ] && [ ! -e "$SYSMODULE/$km_m/srcversion" ]; then
       frame_cmd kernel "cmd/modinfo/$km_m" modinfo "$km_m"
