@@ -6,6 +6,7 @@ mirror the gitleaks defaults that flag test fixtures, and the pinned gitleaks it
 from __future__ import annotations
 
 import os
+import pathlib
 import re
 import shlex
 import shutil
@@ -58,20 +59,29 @@ def test_scanner_rules_detect_known_shapes():
     assert not _NAMED_LITERAL.search("token = RAW_VALUE + \"x\"")
 
 
-def _gitleaks_cmd() -> list[str]:
+def snapshot_sources(dest: pathlib.Path) -> pathlib.Path:
+    """Copy only the *.py test sources to dest, so gitleaks never sees __pycache__/*.pyc."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for path in sorted(TESTS.glob("*.py")):
+        shutil.copyfile(path, dest / path.name)
+    return dest
+
+
+def _gitleaks_cmd(target: pathlib.Path) -> list[str]:
     if CFG["gitleaks_bin"]:
-        return [CFG["gitleaks_bin"], "dir", str(TESTS)]
+        return [CFG["gitleaks_bin"], "dir", str(target)]
     podman = shlex.split(os.environ.get("PODMAN", "podman"))
     image = IMAGE_FILE.read_text().strip()
-    return [*podman, "run", "--rm", "--network=none", "-v", f"{REPO}:/repo:ro,z", image, "dir", "/repo/tests"]
+    return [*podman, "run", "--rm", "--network=none", "-v", f"{target}:/scan:ro,z", image, "dir", "/scan"]
 
 
 @pytest.mark.requires_gitleaks
-def test_pinned_gitleaks_default_rules_find_nothing_in_tests():
+def test_pinned_gitleaks_default_rules_find_nothing_in_tests(tmp_path):
     if not CFG["gitleaks_bin"] and not shutil.which(shlex.split(os.environ.get("PODMAN", "podman"))[0]):
         pytest.skip("no gitleaks and no podman launcher")
-    res = subprocess.run([*_gitleaks_cmd(), "--no-banner", "--redact", "--no-color", "-v"],
-                         capture_output=True, text=True, timeout=300)
+    target = snapshot_sources(tmp_path / "tests-src")
+    res = subprocess.run([*_gitleaks_cmd(target), "--no-banner", "--redact", "--no-color", "-v"],
+                         capture_output=True, text=True, errors="replace", timeout=300)
     hits = re.findall(r"^File:\s+(\S+)\nLine:\s+(\d+)", res.stdout + res.stderr, re.M)
     assert res.returncode == 0, f"gitleaks flagged tests/: {hits}"
 
@@ -96,7 +106,7 @@ def test_snapshot_contains_only_tracked_python_sources(tmp_path):
 
 
 @pytest.mark.requires_gitleaks
-def test_gitleaks_scan_ignores_compiled_bytecode():
+def test_gitleaks_scan_ignores_compiled_bytecode(tmp_path):
     """Regression: a freshly written .pyc of this very file must not trip the pinned gitleaks scan."""
     import py_compile
     cfile = TESTS / "__pycache__" / "zz_hygiene_regression.cpython-0.pyc"
@@ -106,6 +116,6 @@ def test_gitleaks_scan_ignores_compiled_bytecode():
     except OSError:
         pytest.skip("tests/ is read-only")
     try:
-        test_pinned_gitleaks_default_rules_find_nothing_in_tests()
+        test_pinned_gitleaks_default_rules_find_nothing_in_tests(tmp_path)
     finally:
         cfile.unlink(missing_ok=True)
