@@ -143,7 +143,8 @@ def run_fn(call, *args, shell=("sh",), setup="", shim=None, env=None):
     """Source collect.sh (COLLECT_NO_MAIN is test-only), then run `setup; call`. Returns stdout."""
     e = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "COLLECT_NO_MAIN": "1", **(env or {})}
     pre = f'PATH="{shim}:$PATH"; ' if shim else ""
-    p = subprocess.run(list(shell) + ["-c", f'. "{COLLECT}"; {pre}{setup}; {call}', "sh", *map(str, args)],
+    script = "; ".join(x for x in (f'. "{COLLECT}"', pre.rstrip("; "), setup, call) if x)
+    p = subprocess.run(list(shell) + ["-c", script, "sh", *map(str, args)],
                        capture_output=True, env=e, timeout=60)
     assert p.returncode == 0, p.stderr
     return p.stdout.decode()
@@ -246,7 +247,7 @@ def test_blocked_read_and_blocked_command_are_cut_off(tmp_path):
 
 def test_file_reads_are_capped_even_when_size_reports_zero():
     out = run_fn('frame_file t /proc/self/maps', setup="MAXBYTES=64")
-    body = out.split("\n", 1)[1].rsplit("\n\n@@END-", 1)[0]
+    body = out.split("\n", 1)[1].rsplit("\n@@END-", 1)[0]
     assert 0 < len(body.encode()) <= 64
 
 

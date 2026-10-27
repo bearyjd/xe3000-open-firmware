@@ -1,20 +1,53 @@
 #!/bin/sh
-# Phase 1 harvest collector. Runs ON the router: ssh root@HOST 'sh -s' < collect.sh
+# Phase 1 harvest collector. Runs ON the router:
+#   ssh root@HOST 'sh -s glinet-harvest-collect' < collect.sh          full harvest
+#   ssh root@HOST 'sh -s glinet-harvest-collect probe' < collect.sh    capability probe only
+#   ssh root@HOST 'sh -s glinet-harvest-collect COLLECT_LOGS=1' < collect.sh   also snapshot logread (opt-in)
+# The first argument is only a tag so the run can be found and stopped:
+#   ssh root@HOST "pkill -f 'sh -s glinet-harvest-collect'"
 #
 # STRICTLY READ-ONLY. No file is written, no /tmp, no mount, no module load, no AT traffic, no modem node is
 # opened. The only ubus call is `system board`. Every command has stdin from /dev/null so it cannot consume
-# this script (sh -s reads the script from stdin). Deliberately no `set -e`: a missing/failing command must not
-# stop the run.
+# this script (sh -s reads the script from stdin). Every external read is capped by `timeout 10` when the router
+# has `timeout`, and file reads are capped at MAXBYTES, so a blocked /proc or /sys read cannot hang the run for
+# more than ~10 s. Deliberately no `set -e`: a missing/failing command must not stop the run.
 #
-# Output is one framed stream on stdout:
-#   @@BEGIN <kind> <name>  ...content...  (blank line)  @@END <name> <exit>
-# Outside frames: @@MISSING <cmd>, @@SKIPPED <path> <reason>, @@COLLECT-VERSION n, @@DONE <frames>.
-# A frame without @@END (dropped connection) is treated as PARTIAL by harvest.sh; no @@DONE = incomplete run.
+# Output is one framed stream on stdout. The first line announces a per-run nonce; only END/DONE lines carrying
+# that nonce are trusted by harvest.sh, so file content cannot forge a frame boundary:
+#   @@COLLECT-VERSION 2 <nonce>
+#   @@BEGIN <kind> <name>  ...content...  (blank line)  @@END-<nonce> <name> <exit>
+#   @@MISSING <cmd> / @@SKIPPED <path> <reason>   (outside frames)
+#   @@DONE-<nonce> <frames>
+# A frame without @@END (dropped connection) is PARTIAL; no @@DONE = incomplete run. Exit 124 = capped by timeout.
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LC_ALL=C
+export PATH LC_ALL
 MAXBYTES=1048576
+MAXMODINFO=200
 NFRAMES=0
+HEX=
+FDT=/sys/firmware/fdt
+MODULES_FILE=/proc/modules
+SYSMODULE=/sys/module
+CRONDIR=/etc/crontabs
+
+if command -v timeout >/dev/null 2>&1; then TMO="timeout 10"; else TMO=; fi
+if command -v head >/dev/null 2>&1; then HAVE_HEAD=1; else HAVE_HEAD=; fi
+
+NONCE=$(cat /proc/sys/kernel/random/uuid 2>/dev/null </dev/null)
+case $NONCE in
+  ''|*[!A-Za-z0-9-]*) NONCE=$(date +%s)$$ ;;
+esac
+
+MODE=full
+COLLECT_LOGS=
+for arg in "$@"; do
+  case $arg in
+    probe) MODE=probe ;;
+    COLLECT_LOGS=1) COLLECT_LOGS=1 ;;
+  esac
+done
 
 emit_begin() {
   NFRAMES=$((NFRAMES + 1))
@@ -22,7 +55,7 @@ emit_begin() {
 }
 
 emit_end() {
-  printf '\n@@END %s %s\n' "$1" "$2"
+  printf '\n@@END-%s %s %s\n' "$NONCE" "$1" "$2"
 }
 
 missing() {
@@ -46,7 +79,7 @@ is_excluded() {
   return 1
 }
 
-# frame_file KIND PATH [hex]: frame one regular file (text via cat, or hex via od). Silent on non-regular files.
+# frame_file KIND PATH [hex]: frame one regular file (capped text read, or hex). Silent on non-regular files.
 frame_file() {
   ff_k=$1
   ff_p=$2
@@ -59,10 +92,11 @@ frame_file() {
   if [ ! -f "$ff_p" ]; then return 0; fi
   ff_r=
   if command -v readlink >/dev/null 2>&1; then
-    ff_r=$(readlink -f "$ff_p" 2>/dev/null </dev/null)
+    ff_r=$($TMO readlink -f "$ff_p" 2>/dev/null </dev/null)
   fi
   if [ -n "$ff_r" ] && is_excluded "$ff_r"; then skipped "$ff_p" excluded-target; return 0; fi
-  ff_l=$(ls -lnL "$ff_p" 2>/dev/null </dev/null)
+  ff_l=$($TMO ls -lnL "$ff_p" 2>/dev/null </dev/null)
+  if [ -z "$ff_l" ]; then skipped "$ff_p" stat-failed; return 0; fi
   # shellcheck disable=SC2086  # intentional word splitting; path charset above has no glob characters
   set -- $ff_l
   ff_mode=$1
@@ -76,10 +110,14 @@ frame_file() {
     *) if [ "$ff_sz" -gt "$MAXBYTES" ]; then skipped "$ff_p" "size=$ff_sz"; return 0; fi ;;
   esac
   emit_begin "$ff_k" "${ff_p#/}"
-  if [ "$ff_m" = hex ]; then
-    od -An -v -tx1 "$ff_p" </dev/null 2>&1
+  if [ "$ff_m" = hex ] && [ "$HEX" = od ]; then
+    $TMO od -An -v -tx1 "$ff_p" </dev/null 2>&1
+  elif [ "$ff_m" = hex ] && [ "$HEX" = hexdump ]; then
+    $TMO hexdump -v -e '16/1 "%02x " "\n"' "$ff_p" </dev/null 2>&1
+  elif [ -n "$HAVE_HEAD" ]; then
+    $TMO head -c "$MAXBYTES" "$ff_p" </dev/null 2>&1
   else
-    cat "$ff_p" </dev/null 2>&1
+    $TMO cat "$ff_p" </dev/null 2>&1
   fi
   ff_rc=$?
   emit_end "${ff_p#/}" "$ff_rc"
@@ -91,14 +129,14 @@ opt_file() {
   frame_file "$1" "$2" "$3"
 }
 
-# frame_cmd KIND NAME CMD [ARGS...]: frame an external command; @@MISSING if it is not installed.
+# frame_cmd KIND NAME CMD [ARGS...]: frame an external command (capped by $TMO); @@MISSING if not installed.
 frame_cmd() {
   fc_k=$1
   fc_n=$2
   shift 2
   if ! command -v "$1" >/dev/null 2>&1; then missing "$1"; return 0; fi
   emit_begin "$fc_k" "$fc_n"
-  "$@" </dev/null 2>&1
+  $TMO "$@" </dev/null 2>&1
   fc_rc=$?
   emit_end "$fc_n" "$fc_rc"
 }
@@ -114,7 +152,7 @@ frame_fn() {
 # Modem: device nodes are only stat-ed via ls -l; nothing is ever read from them.
 modem_ports() {
   for mp_d in /dev/ttyUSB* /dev/ttyACM* /dev/cdc-wdm* /dev/wwan* /dev/mhi*; do
-    if [ -e "$mp_d" ] || [ -L "$mp_d" ]; then ls -l "$mp_d" </dev/null 2>&1; fi
+    if [ -e "$mp_d" ] || [ -L "$mp_d" ]; then $TMO ls -l "$mp_d" </dev/null 2>&1; fi
   done
   return 0
 }
@@ -136,12 +174,64 @@ modem_owners() {
   return 0
 }
 
-# Fallback only when /sys/firmware/fdt is absent: every /proc/device-tree property as hex (depth <= 6).
+# pid + process name only (/proc/<pid>/comm). Command lines (/proc/<pid>/cmdline, ps w) are never collected:
+# they carry passwords (pppd, curl -u, mosquitto_pub -P).
+proc_comm_table() {
+  for pt_d in /proc/[0-9]*; do
+    pt_p=${pt_d#/proc/}
+    pt_c=
+    { read -r pt_c < "/proc/$pt_p/comm"; } 2>/dev/null
+    printf '%s %s\n' "$pt_p" "$pt_c"
+  done
+  return 0
+}
+
+# Crontab lines, but only after a conservative filter: any line containing pass, pwd, secret, token, key, auth,
+# user, '-u ', '-p ' (either case for the flags) or '://' is dropped and only counted.
+crontab_filtered() {
+  for ct_f in "$CRONDIR"/*; do
+    [ -f "$ct_f" ] || continue
+    is_excluded "$ct_f" && continue
+    printf '# file %s\n' "${ct_f##*/}"
+    ct_drop=0
+    while IFS= read -r ct_l || [ -n "$ct_l" ]; do
+      case $ct_l in
+        *[Pp][Aa][Ss][Ss]*|*[Pp][Ww][Dd]*|*[Ss][Ee][Cc][Rr][Ee][Tt]*|*[Tt][Oo][Kk][Ee][Nn]*|*[Kk][Ee][Yy]*|*[Aa][Uu][Tt][Hh]*|*[Uu][Ss][Ee][Rr]*|*"-u "*|*"-p "*|*"-U "*|*"-P "*|*://*)
+          ct_drop=$((ct_drop + 1)) ;;
+        *) printf '%s\n' "$ct_l" ;;
+      esac
+    done < "$ct_f"
+    printf '# dropped %s line(s)\n' "$ct_drop"
+  done
+  return 0
+}
+
+# Pick a hex dumper: od, else hexdump; HEX stays empty when neither works.
+detect_hex() {
+  HEX=
+  if command -v od >/dev/null 2>&1 && $TMO od -An -tx1 /dev/null >/dev/null 2>&1; then
+    HEX=od
+  elif command -v hexdump >/dev/null 2>&1 && $TMO hexdump -v -e '16/1 "%02x " "\n"' /dev/null >/dev/null 2>&1; then
+    HEX=hexdump
+  fi
+}
+
+# Fallback when the live DTB cannot be dumped: every /proc/device-tree property (hex if possible), depth <= 6.
 dt_fallback() {
   for dt_p in /proc/device-tree/* /proc/device-tree/*/* /proc/device-tree/*/*/* \
               /proc/device-tree/*/*/*/* /proc/device-tree/*/*/*/*/* /proc/device-tree/*/*/*/*/*/*; do
     opt_file hw-dt "$dt_p" hex
   done
+}
+
+collect_fdt() {
+  detect_hex
+  if [ -e "$FDT" ] && [ -n "$HEX" ]; then
+    frame_file hw-bin "$FDT" hex
+  else
+    missing "$FDT"
+    dt_fallback
+  fi
 }
 
 collect_identity() {
@@ -154,12 +244,7 @@ collect_identity() {
 }
 
 collect_hardware() {
-  if [ -e /sys/firmware/fdt ]; then
-    frame_file hw-bin /sys/firmware/fdt hex
-  else
-    missing /sys/firmware/fdt
-    dt_fallback
-  fi
+  collect_fdt
   frame_cmd hw cmd/ls-pci ls -l /sys/bus/pci/devices
   for hp_d in /sys/bus/pci/devices/*; do
     [ -e "$hp_d" ] || continue
@@ -210,19 +295,36 @@ collect_hardware() {
   done
 }
 
-collect_kernel() {
-  frame_cmd kernel cmd/lsmod lsmod
-  if command -v modinfo >/dev/null 2>&1; then km_has=1; else km_has=; missing modinfo; fi
+# Per-module info: sysfs attributes always; modinfo only when sysfs lacks version/srcversion and the module count
+# is sane (a router with hundreds of modules would otherwise fork hundreds of times).
+collect_modinfo() {
+  km_n=0
+  while read -r km_m km_rest; do
+    km_n=$((km_n + 1))
+  done < "$MODULES_FILE"
+  km_has=
+  if command -v modinfo >/dev/null 2>&1; then km_has=1; else missing modinfo; fi
+  if [ -n "$km_has" ] && [ "$km_n" -gt "$MAXMODINFO" ]; then
+    skipped modinfo "module-count=$km_n"
+    km_has=
+  fi
   while read -r km_m km_rest; do
     case $km_m in ''|*[!A-Za-z0-9_-]*) continue ;; esac
-    if [ -n "$km_has" ]; then frame_cmd kernel "cmd/modinfo/$km_m" modinfo "$km_m"; fi
+    if [ -n "$km_has" ] && [ ! -e "$SYSMODULE/$km_m/version" ] && [ ! -e "$SYSMODULE/$km_m/srcversion" ]; then
+      frame_cmd kernel "cmd/modinfo/$km_m" modinfo "$km_m"
+    fi
     for km_a in version srcversion taint; do
-      opt_file kernel "/sys/module/$km_m/$km_a"
+      opt_file kernel "$SYSMODULE/$km_m/$km_a"
     done
-    for km_a in "/sys/module/$km_m"/parameters/*; do
+    for km_a in "$SYSMODULE/$km_m"/parameters/*; do
       opt_file kernel "$km_a"
     done
-  done < /proc/modules
+  done < "$MODULES_FILE"
+}
+
+collect_kernel() {
+  frame_cmd kernel cmd/lsmod lsmod
+  collect_modinfo
   frame_cmd kernel cmd/dmesg dmesg
   frame_cmd kernel cmd/ls-lib-modules ls -lR /lib/modules
 }
@@ -230,12 +332,14 @@ collect_kernel() {
 collect_system() {
   frame_cmd sys cmd/ubus-list ubus -v list
   frame_cmd sys cmd/ubus-call-system-board ubus call system board
-  frame_cmd sys cmd/ps ps w
+  frame_fn sys cmd/proc-comm proc_comm_table
   frame_cmd sys cmd/netstat netstat -lntup
   for cs_f in /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6; do
     opt_file sys "$cs_f"
   done
   frame_cmd sys cmd/ls-init ls -l /etc/init.d /etc/rc.d
+  frame_cmd sys cmd/ls-crontabs ls -l /etc/crontabs
+  frame_fn sys cmd/crontabs-filtered crontab_filtered
   for cs_d in /etc/hotplug.d/*; do
     [ -d "$cs_d" ] || continue
     frame_cmd sys "cmd/ls${cs_d}" ls -l "$cs_d"
@@ -243,10 +347,14 @@ collect_system() {
       opt_file sys "$cs_f"
     done
   done
-  for cs_f in /etc/init.d/* /etc/crontabs/*; do
+  for cs_f in /etc/init.d/*; do
     opt_file sys "$cs_f"
   done
-  frame_cmd sys cmd/logread logread
+  if [ -n "$COLLECT_LOGS" ]; then
+    frame_cmd sys cmd/logread logread
+  else
+    skipped logread logs-not-requested
+  fi
 }
 
 collect_config() {
@@ -261,16 +369,43 @@ collect_modem() {
   frame_fn modem cmd/modem-owners modem_owners
 }
 
+# Probe mode: learn which tools the router's busybox has before the full run. Nothing else is run.
+probe_busybox() {
+  if command -v busybox >/dev/null 2>&1; then
+    busybox --list </dev/null 2>&1 | grep -E '^(od|hexdump|timeout|head|readlink|ls|netstat|logread|lsmod|modinfo|dmesg)$'
+  else
+    missing busybox
+  fi
+  return 0
+}
+
+probe_commands() {
+  for pc_c in od hexdump timeout head readlink ls netstat logread lsmod modinfo dmesg ubus date cat busybox grep; do
+    if command -v "$pc_c" >/dev/null 2>&1; then printf 'present %s\n' "$pc_c"; else printf 'absent %s\n' "$pc_c"; fi
+  done
+  return 0
+}
+
+probe() {
+  printf '@@COLLECT-VERSION 2 %s\n' "$NONCE"
+  frame_cmd probe cmd/uname uname -a
+  frame_fn probe cmd/busybox-list probe_busybox
+  frame_fn probe cmd/command-v probe_commands
+  printf '@@DONE-%s %s\n' "$NONCE" "$NFRAMES"
+}
+
 main() {
-  printf '@@COLLECT-VERSION 1\n'
+  printf '@@COLLECT-VERSION 2 %s\n' "$NONCE"
   collect_identity
   collect_hardware
   collect_kernel
   collect_system
   collect_config
   collect_modem
-  printf '@@DONE %s\n' "$NFRAMES"
+  printf '@@DONE-%s %s\n' "$NONCE" "$NFRAMES"
 }
 
 # COLLECT_NO_MAIN lets the offline tests source the functions; it is never set on the router.
-if [ -z "${COLLECT_NO_MAIN:-}" ]; then main; fi
+if [ -z "${COLLECT_NO_MAIN:-}" ]; then
+  if [ "$MODE" = probe ]; then probe; else main; fi
+fi

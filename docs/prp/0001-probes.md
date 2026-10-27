@@ -136,14 +136,19 @@ Transport: one `ssh -o BatchMode=yes -o ConnectTimeout=10 root@$ROUTER_HOST 'sh 
 
 Nothing in this list writes, mounts, loads modules, calls `ubus call` besides `system board`, opens a modem port, or touches `/sys` attributes that are write-only or have read side-effects.
 
-**Implemented as `scripts/remote/collect.sh` + `scripts/harvest.sh` (deviations from the list above):**
-- Process names come from `/proc/<pid>/comm` only; `cmdline` is never read. Fd owners use `readlink` on `/proc/*/fd/*` (no node is opened) instead of `ls -l`.
-- `power_supply/*/uevent` is skipped: it re-exposes `POWER_SUPPLY_SERIAL_NUMBER`. Any path whose basename contains `serial`, plus `*/private/*` and `id_*` key names, is also excluded.
-- Files over 1 MiB, files without owner-read permission (write-only attributes), and names outside `[A-Za-z0-9._/@:+=,#-]` are skipped with `@@SKIPPED`.
-- The `/proc/device-tree` fallback (hex per property, depth <= 6) runs only when `/sys/firmware/fdt` is absent.
-- `/proc/net/{tcp,tcp6,udp,udp6}` are always read; `netstat` additionally if installed. `modinfo` and the `/sys/module` attributes are both collected.
-- Added `@@COLLECT-VERSION` and a final `@@DONE <frames>` marker; a stream without `@@DONE`, a frame without `@@END` (`*.PARTIAL`), or a non-zero ssh exit makes `harvest.sh` exit 2 and the run must not be analysed as whole.
+**Implemented as `scripts/remote/collect.sh` + `scripts/harvest.sh` (deviations from the list above, on purpose):**
+- **Data minimisation.** `ps w` and every `/proc/*/cmdline` are NOT collected (command lines carry passwords: pppd, `curl -u`, `mosquitto_pub -P`). Instead a `pid comm` table is built from `/proc/[0-9]*/comm` only, plus the modem port owner map (also `comm` only; fd owners via `readlink`, no node is opened).
+- `/etc/crontabs/*` contents are NOT cat'ed. File names and sizes are listed with `ls -l`, and crontab lines are captured only after a conservative remote filter that drops (and counts) any line containing pass, pwd, secret, token, key, auth, user (any case), `-u `, `-p `, `-U `, `-P ` or `://`.
+- `logread` is opt-in: `harvest.sh --with-logs` passes `COLLECT_LOGS=1` as a remote positional argument. Default off; `dmesg` stays. `/etc/config/*` stays (needed), and raw harvest output never leaves the workstation.
+- `power_supply/*/uevent` is skipped (it re-exposes `POWER_SUPPLY_SERIAL_NUMBER`). Any basename containing `serial`, plus `*/private/*` and `id_*` key names, is also excluded.
+- Files over 1 MiB, files without owner-read permission, and names outside `[A-Za-z0-9._/@:+=,#-]` are skipped with `@@SKIPPED`.
+- **Hang protection.** Each external read is wrapped in `timeout 10` when the router has `timeout`; file reads use `head -c 1048576` so size-0 `/proc` and `/sys` files are capped; a capped command ends with exit 124. `harvest.sh` wraps ssh in `timeout -k 10 ${HARVEST_TIMEOUT:-600}` with `ServerAliveCountMax=3`, and runs the remote as `sh -s glinet-harvest-collect` so a stuck run can be stopped with `ssh root@$ROUTER_HOST "pkill -f 'sh -s glinet-harvest-collect'"` (printed, never run automatically).
+- **Frame authentication.** The first line is `@@COLLECT-VERSION 2 <nonce>` (nonce from `/proc/sys/kernel/random/uuid`, fallback `date +%s` plus pid); only `@@END-<nonce>` and `@@DONE-<nonce>` lines are trusted, so file content cannot forge a boundary. A frame without `@@END` (`*.PARTIAL`), a missing `@@DONE`, or a non-zero ssh exit makes `harvest.sh` exit 2; such a run must not be analysed as whole.
 - `harvest.sh` rejects frame names with `..`, absolute or empty segments, bad characters, duplicates, or a `.PARTIAL` suffix.
+- **DTB:** `od -An -v -tx1`; if `od` is unusable, `hexdump -v -e '16/1 "%02x " "\n"'`; if neither works the fdt frame is reported `@@MISSING` and the `/proc/device-tree` property walk (depth <= 6) is used instead.
+- `modinfo` runs once per module only when `/sys/module/<m>/{version,srcversion}` is absent, and is skipped entirely (`@@SKIPPED modinfo module-count=N`) above 200 modules. `/proc/net/{tcp,tcp6,udp,udp6}` are always read; `netstat` additionally if installed.
+- **`--probe`** runs only `uname -a`, `busybox --list` filtered to the tools we depend on, and `command -v` checks, so busybox capabilities can be learned before the full run. `--dry-print` (with or without `--probe`/`--with-logs`) prints the exact remote command and script and never connects.
+- Static tests are an allowlist: every external command form and every `frame_cmd`/`frame_fn` call is pinned; adding a command means editing `tests/test_harvest_static.py`.
 
 ## 7. Outputs
 
