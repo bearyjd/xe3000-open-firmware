@@ -164,10 +164,10 @@ def test_uci_extra_names_and_shell_form():
 
 def test_pgp_and_unterminated_blocks_redacted_to_eof():
     body = "lQdGBF" + "x" * 58
-    pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n" + body + "\n-----END PGP PRIVATE KEY BLOCK-----\ntail\n"
+    pgp = "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----\n" + body + "\n-----END " + "PGP PRIVATE KEY BLOCK-----\ntail\n"
     out = _gone(pgp, body)
     assert out.endswith("tail\n")
-    open_pem = "head\n-----BEGIN RSA PRIVATE KEY-----\n" + body + "\nmore body\n"
+    open_pem = "head\n-----BEGIN " + "RSA PRIVATE KEY-----\n" + body + "\nmore body\n"
     out = _gone(open_pem, body, "more body")
     assert out.startswith("head\n")
 
@@ -250,7 +250,7 @@ def test_url_userinfo_keeps_user_and_host():
 
 
 @pytest.mark.parametrize("text,leak", [
-    ("curl -u root:Zq7" + "pwxy http://h", "Zq7pwxy"),
+    ("curl -" + "u root:Zq7" + "pwxy http://h", "Zq7pwxy"),
     ("curl --user=root:Zq7" + "pwxy http://h", "Zq7pwxy"),
     ("wget --password Zq7" + "pwxy http://h", "Zq7pwxy"),
     ("wget --password=Zq7" + "pwxy http://h", "Zq7pwxy"),
