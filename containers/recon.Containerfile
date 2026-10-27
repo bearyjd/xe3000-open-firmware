@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir \
     anthropic==2.3.0 \
     python-dotenv==1.2.4 \
     jsonschema==4.26.0 \
+    pyyaml==6.0.2 \
     pytest==9.1.1 \
     pytest-cov==7.1.0
 

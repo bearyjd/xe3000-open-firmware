@@ -20,6 +20,7 @@ test: build
     {{PODMAN}} run --rm {{hardening}} --network=none -e COVERAGE_FILE=/tmp/.coverage \
       -v "{{ROOT}}/scripts:/work/scripts:ro,z" -v "{{ROOT}}/tests:/work/tests:ro,z" -v "{{ROOT}}/hooks:/work/hooks:ro,z" \
       -v "{{ROOT}}/containers:/work/containers:ro,z" -v "{{ROOT}}/justfile:/work/justfile:ro,z" \
+      -v "{{ROOT}}/.github:/work/.github:ro,z" -v "{{ROOT}}/.gitleaks-baseline.json:/work/.gitleaks-baseline.json:ro,z" \
       -v "{{ROOT}}/docs:/work/docs:ro,z" -v "{{ROOT}}/README.md:/work/README.md:ro,z" \
       {{IMAGE}} pytest -c tests/pytest.ini -p no:cacheprovider --cov=recon --cov-report=term-missing
 
