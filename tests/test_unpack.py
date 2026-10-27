@@ -1,6 +1,7 @@
 """Safe extraction and staging of a stock firmware tree (pure Python; synthetic tars built at test time)."""
 from __future__ import annotations
 
+import importlib
 import io
 import json
 import os
@@ -292,7 +293,7 @@ def test_nested_images_in_a_sysupgrade_tar_go_through_unblob(tmp_path, monkeypat
     (tree / "sysupgrade-x" / "CONTROL").write_text("small")
     seen = []
     monkeypatch.setattr(unpack.shutil, "which", lambda n: "/x/unblob")
-    monkeypatch.setattr(unpack, "run_unblob", lambda p, w, tree=None, tag="": seen.append((p.name, tree, tag)))
+    monkeypatch.setattr(importlib.import_module("recon.unpack"), "run_unblob", lambda p, w, tree=None, tag="": seen.append((p.name, tree, tag)))
     assert unpack.unpack_nested(tree, tmp_path / "work") == 1
     assert seen[0][0] == "root" and seen[0][1] == tree
     (tree / "etc").mkdir()
