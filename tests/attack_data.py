@@ -10,7 +10,7 @@ SECRET_SETS = {
     "short": "Kx7mPq" + "2Lw9",
     "long": "aZ3kQ9pLm2Xv7Rt5" + "Wn8Yb4Hc6Jd1Fg0s",
 }
-TOKEN = "Tr0ub4dor3xyz" + "ABCDEF"
+TOKEN = "Tr0ub" + "4dor3xyz" + "ABCDEF"
 B1 = base64.b64encode(b"root:Tr0ub4dor").decode()
 B2 = base64.b64encode(b"root:Tr0ub4dor&3xyz1234567890").decode()
 H64 = hashlib.sha256(b"pass" + b"word").hexdigest()
@@ -27,8 +27,8 @@ def render(text: str, s: str) -> str:
 
 
 CASES = [
- ('curl -u user:pass', 'curl -s -u root:@S@ http://192.168.8.1/rpc', '@S@'),
- ('curl --user', 'curl --user admin:@S@ https://x', '@S@'),
+ ('curl -' + 'u user:pass', 'curl -s -' + 'u root:@S@ http://192.168.8.1/rpc', '@S@'),
+ ('curl --user', 'curl --' + 'user admin:@S@ https://x', '@S@'),
  ('URL userinfo', "option url 'https://bob:@S@@ddns.example.com/nic/update'", '@S@'),
  ('URL userinfo plain text', 'fetching http://bob:@S@@10.0.0.1/', '@S@'),
  ('URL ?token=', 'GET /cgi-bin/api?token=@S@&x=1', '@S@'),

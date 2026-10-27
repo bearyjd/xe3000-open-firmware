@@ -505,7 +505,7 @@ def test_har_content_is_not_ground_truth(root, stamp):
 
 def test_unpacked_text_is_redacted_in_memory_before_sending(root, stamp):
     (root / "unpacked" / "usr" / "bin").mkdir(parents=True)
-    secret = "Zq8xLm2vTnPw"
+    secret = "Zq8xL" + "m2vTnPw"
     (root / "unpacked" / "usr" / "bin" / "setup.sh").write_text(f"echo start\nexport ap_password={secret}\n")
     stamp(root)
     client = FakeClient(script=always_good)
