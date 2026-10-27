@@ -13,10 +13,10 @@ dst_rel="${2:?}"
 report="${3:?}"
 case "$src" in *:* | *,*) echo "redact: SRC must not contain ':' or ','" >&2; exit 2 ;; esac
 case "$dst_rel$report" in *:* | *,* | *..*) echo "redact: bad DST_REL or REPORT_NAME" >&2; exit 2 ;; esac
-[ -d "$src" ] && [ ! -L "$src" ] || { echo "redact: SRC is not a plain directory: $src" >&2; exit 2; }
+if [ ! -d "$src" ] || [ -L "$src" ]; then echo "redact: SRC is not a plain directory: $src" >&2; exit 2; fi
 src_real="$(cd -P -- "$src" && pwd)"
 if [ "$allow_anywhere" -ne 1 ]; then
-  raw_real="$(cd -P -- "$ROOT/harvest/raw" 2>/dev/null && pwd)" || { echo "redact: $ROOT/harvest/raw missing" >&2; exit 2; }
+  if ! raw_real="$(cd -P -- "$ROOT/harvest/raw" 2>/dev/null && pwd)"; then echo "redact: $ROOT/harvest/raw missing" >&2; exit 2; fi
   case "$src_real/" in
     "$raw_real"/?*) ;;
     *) echo "redact: SRC must be inside $ROOT/harvest/raw (or pass --allow-src-anywhere)" >&2; exit 2 ;;
