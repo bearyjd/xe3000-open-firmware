@@ -38,6 +38,10 @@ redact-unpacked SRC: build
     ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} IMAGE={{quote(IMAGE)}} HARDENING={{quote(hardening)}} \
       bash "{{ROOT}}/scripts/redact-container.sh" "$1" unpacked unpacked-redaction-report.json
 
+# Create the (empty, mode 0600) known-secret canary file and print how to use it. Never overwrites.
+canary-init:
+    python3 "{{ROOT}}/scripts/recon/canary.py" --init
+
 # Estimate only: counts tokens (free API call), prints worst-case cost, sends nothing.
 dry-run RUN_ID *ARGS: build
     ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} IMAGE={{quote(IMAGE)}} HARDENING={{quote(hardening)}} \

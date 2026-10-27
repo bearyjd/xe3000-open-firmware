@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from recon import chunking, cost, groundtruth, preflight, prompts, schema
+from recon import allowlist, canary, chunking, cost, groundtruth, preflight, prompts, schema
 from recon.cache import Cache, cache_key
 from recon.chunking import Chunk
 from recon.client import ModelResponse
@@ -57,6 +57,9 @@ class RunConfig:
     batch_poll_seconds: float = 20.0
     batch_timeout_seconds: float = DEFAULT_BATCH_TIMEOUT_SECONDS
     resume_batch_id: str | None = None  # poll this existing batch instead of creating one
+    allow_extra: tuple[str, ...] = ()  # explicit, logged opt-in globs on top of the allowlist file
+    no_canary: bool = False  # fixture runs only
+    canary_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +236,7 @@ def _manifest(cfg: RunConfig, status: str, est: cost.Estimate, meta: dict, ledge
         "prompt_version": prompts.PROMPT_VERSION, "schema_version": schema.SCHEMA_VERSION,
         "batch": cfg.batch, "batch_id": meta.get("batch_id"),
         "inputs": {"tree_sha256": meta["digest"], "files": meta["files"]}, "skipped": meta["skipped"],
+        "denied": meta["denied"], "allow_extra": list(cfg.allow_extra),
         "chunks": counts["chunks"], "chunks_cached": counts["cached"],
         "accepted": counts["accepted"], "rejected": counts["rejected"],
         "estimate": {"input_tokens": est.input_tokens, "max_output_tokens": est.max_output_tokens,
@@ -295,26 +299,58 @@ def _prepare_run_dir(run_dir: Path, cfg: RunConfig, digest: str) -> float:
     return float(prior.get("committed_usd") or 0.0)
 
 
-def _load_inputs(cfg: RunConfig):
-    """Read every file ONCE. Returns (digest, hashed files, skipped, sendable texts)."""
+def _canary_gate(cfg: RunConfig, raw: dict[str, str]) -> None:
+    try:
+        hits = canary.check(raw, skip=cfg.no_canary, path=cfg.canary_file)
+    except canary.CanaryError as exc:
+        raise RunRefused(str(exc)) from None
+    if hits:
+        raise RunRefused(f"a known-secret canary was found at (file:line; value never printed): "
+                         f"{canary.format_hits(hits)}; nothing was sent")
+
+
+def _patterns(cfg: RunConfig, out) -> tuple[str, ...]:
+    try:
+        base = allowlist.load_patterns(cfg.root / allowlist.ALLOWLIST_REL)
+    except allowlist.AllowlistError as exc:
+        raise RunRefused(str(exc)) from None
+    for pattern in cfg.allow_extra:
+        if pattern.startswith("/") or ".." in pattern.split("/"):
+            raise RunRefused(f"--allow-extra pattern escapes the input root: {pattern!r}")
+    if cfg.allow_extra:
+        out(f"allow-extra ENABLED (explicit opt-in, logged in the manifest): {', '.join(cfg.allow_extra)}")
+    return (*base, *cfg.allow_extra)
+
+
+def _classify_inputs(groups, patterns):
+    """Split files into sendable texts (redacted again in memory), skipped (excluded/binary) and denied."""
+    files, skipped, denied, texts = [], [], [], {}
+    for _dir, items in groups:
+        for name, data in items:
+            files.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
+            if is_excluded(Path(name)):  # shadow, serial*, dropbear, *.pem, *.key, *_host_key, secret files
+                skipped.append({"name": name, "reason": "excluded"})
+            elif b"\0" in data or name.lower().endswith(BINARY_SUFFIXES):
+                skipped.append({"name": name, "reason": "binary"})
+            elif not allowlist.is_allowed(name, patterns):
+                denied.append(name)
+            else:
+                texts[name] = redact_text(data.decode("utf-8", errors="replace"), salt=ANALYZE_SALT)[0]
+    return files, skipped, sorted(denied), texts
+
+
+def _load_inputs(cfg: RunConfig, out):
+    """Read every file ONCE. Returns (digest, hashed files, skipped, denied, sendable texts)."""
     groups = preflight.read_groups(cfg.inputs, cfg.root)  # PathRefused on raw/traversal/symlink escape
+    _canary_gate(cfg, {n: d.decode("utf-8", errors="replace") for _g, items in groups for n, d in items})
     digest = preflight.hash_tree(groups)
     if not preflight.stamp_valid(cfg.root, digest):
         raise RunRefused("no valid pre-flight stamp for the current input tree and gitleaks setup; "
                          "run `just preflight` first")
-    files, skipped, texts = [], [], {}
-    for _dir, items in groups:
-        for name, data in items:
-            files.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
-            if is_excluded(Path(name)):  # shadow, serial*, dropbear, *.pem, *.key, *_host_key
-                skipped.append({"name": name, "reason": "excluded"})
-                continue
-            if b"\0" in data or name.lower().endswith(BINARY_SUFFIXES):
-                skipped.append({"name": name, "reason": "binary"})
-                continue
-            text = data.decode("utf-8", errors="replace")
-            texts[name] = redact_text(text, salt=ANALYZE_SALT)[0] if name.startswith("unpacked/") else text
-    return digest, files, skipped, texts
+    files, skipped, denied, texts = _classify_inputs(groups, _patterns(cfg, out))
+    if not texts:
+        out(f"no allowlisted files to send ({len(denied)} denied); nothing will be sent")
+    return digest, files, skipped, denied, texts
 
 
 def _write_failure(run_dir: Path, manifest: dict, ledger: _Ledger) -> None:
@@ -383,7 +419,7 @@ def _finish(cfg, client, chunks, results, run_dir, est, meta, ledger, tally, out
 def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str], None] = print,
         sleep: Callable[[float], None] = time.sleep) -> RunResult:
     _validate_run_id(cfg.run_id)
-    digest, files, skipped, texts = _load_inputs(cfg)
+    digest, files, skipped, denied, texts = _load_inputs(cfg, out)
     results: dict[str, dict] = {}
     chunks, keys, truth, pending = _plan(cfg, texts, results)
     cached = len(chunks) - len(pending)
@@ -394,7 +430,8 @@ def run(cfg: RunConfig, client_factory: Callable[[], object], out: Callable[[str
         return RunResult("dry-run", est, 0, 0, 0.0, None)
     run_dir = cfg.root / "findings" / "raw" / cfg.run_id
     ledger = _Ledger(max(est.usd, _prepare_run_dir(run_dir, cfg, digest)), [])
-    meta = {"digest": digest, "files": files, "skipped": skipped, "batch_id": cfg.resume_batch_id}
+    meta = {"digest": digest, "files": files, "skipped": skipped, "denied": denied,
+            "batch_id": cfg.resume_batch_id}
     tally = {"chunks": len(chunks), "cached": cached, "accepted": 0, "rejected": 0}
 
     def on_created(batch_id: str) -> None:

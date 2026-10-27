@@ -4,8 +4,12 @@ import pytest
 from attack_data import CASES, SECRET_SETS, render
 from recon import redact
 
+# Unlabelled content that no text rule can recognise; such files are dropped by NAME (see test_redact.py).
+NAME_ONLY = {"ovpn auth-user-pass file"}
 PARAMS = []
 for label, text, secret in CASES:
+    if label in NAME_ONLY:
+        continue
     if "@S@" in text and secret == "@S@":
         PARAMS += [pytest.param(text, secret, name, id=f"{label}|{name}") for name in SECRET_SETS]
     else:
@@ -57,3 +61,9 @@ def test_gpio_numbers_at_commands_and_names_survive_next_to_redactions():
     out = redact.redact_text(text, salt="x")[0]
     assert "gpio: 527" in out and "AT+CPIN" in out and "4321" not in out
     assert "ubus call modem get_info" in out and "insmod mhi_wwan_ctrl" in out
+
+
+def test_name_only_cases_are_covered_by_file_exclusion():
+    from pathlib import Path
+    for rel in ("etc/openvpn/auth-user-pass", "etc/openvpn/client.auth", "etc/ppp/chap-secrets"):
+        assert redact._is_excluded(Path(rel)), rel

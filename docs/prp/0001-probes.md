@@ -112,6 +112,18 @@ Replacement is `<REDACTED:rule>`. The report lists file, rule and count only. Ha
 
 The pre-flight is deliberately **independent**: `gitleaks.toml` has its own rules for the same classes (UCI secret options, WireGuard keys, Luhn IMEI-like digit runs, ICCID, PSK lines). A test disables one `redact.py` rule, runs the redactor, and asserts the pre-flight aborts on exactly that planted secret.
 
+### Layers (defence in depth)
+
+Regex redaction is a blacklist and **cannot be complete** (an adversarial review of the first implementation leaked 48 of 100 hostile inputs). It is therefore only one of five layers, and none of them is trusted alone:
+
+1. **Name exclusion**, at redaction and again at load time: `shadow`, `serial*`, `dropbear/*`, `*_host_key`, `*.pem`/`*.key`, `chap-secrets`, `pap-secrets`, `ipsec.secrets`, `*.psk`, `*.secrets`, `*.auth`, `*wpa_psk*`, `auth-user-pass`, `htpasswd`. These files carry unlabelled secrets that no text rule can see.
+2. **Redaction** (`redact.py`, table above plus: URL userinfo, command-line forms such as `curl -u`/`sshpass -p`/`chpasswd`, JSON/XML/HTML/YAML forms, inline key blocks, 64-hex PSKs, base64 blobs, AT PIN/credential arguments). Rules repeat to a fixed point. The engine re-runs the redactor in memory over **every** text file it sends, not only `unpacked/`.
+3. **Independent gitleaks pre-flight** with its own regexes and entropy rules (stamp bound to tree, config and image digest).
+4. **Default-deny API allowlist**: `analyze.py` sends only files matching `containers/recon-allowlist.txt` (init/hotplug scripts, hardware configs by name, dmesg, DTS, module lists, ubus method lists). Everything else is listed under `denied` in the manifest and never sent. `--allow-extra GLOB` is an explicit opt-in, printed and recorded in the manifest. Files such as `ps`, `logread`, crontabs and `etc/config/{wireless,network,rpcd,vpn*,wireguard*,ddns}` are deliberately not on it.
+5. **Known-secret canaries**: an optional 0600 file (`$RECON_CANARY_FILE` or `~/.config/xe3000-open-firmware/canaries`, created by `just canary-init`) holds the owner's real secrets. If any appears in ANY input file, including denied ones, as plain text, case-folded, URL-encoded, base64 or hex, the pre-flight and `analyze.py` abort and print only file and line. When a real harvest is detected (marker written by `redact.py`) and no canary file exists, they refuse unless `--no-canary` is given (fixture runs use that flag). The file is never copied into the repo; the analyze container gets it as a read-only mount only.
+
+Residual risk, stated plainly: an unlabelled secret that is not in the canary file, not in an excluded file name and not recognised by any pattern, inside a file that is on the allowlist, would still be sent. The allowlist keeps that surface small (scripts, DTS, dmesg), and the canaries cover the secrets the owner knows about.
+
 ## 6. Harvest command list (Phase 1, NOT run in Phase 0)
 
 Transport: one `ssh -o BatchMode=yes -o ConnectTimeout=10 root@$ROUTER_HOST 'sh -s' < scripts/remote/collect.sh`, streaming a framed text stream (`@@BEGIN kind name` … `@@END`) back over stdout; the workstation splits it into `harvest/raw/<ts>/` and tars it. Nothing is written on the router, not even `/tmp`. Binary data (the DTB) is streamed as hex via `od`. busybox `ash`; each command is wrapped so a missing command logs `@@MISSING <cmd>` and the script continues.
@@ -173,7 +185,7 @@ Fixtures are generated in pytest `tmp_path` at test time so planted fake secrets
 Questions the reviewer must answer, with answers recorded here after the review pass:
 
 1. **Is an LLM needed at all?** Grep and `dtc` give the lists; the model only labels purpose and links. If findings are mostly restatements of the ground truth, the engine is overhead. Test: do fixture findings add anything not in the ground-truth lists?
-2. **Is redaction trustworthy?** Regexes miss novel formats (a PSK with no label, a token in a URL query). The gitleaks pre-flight uses different rules but is also pattern based. Residual risk is nonzero; spot-check required before Phase 2.
+2. **Is redaction trustworthy?** No. Regexes miss novel formats, and the first implementation leaked 48 of 100 adversarial inputs, so the design now assumes regex redaction **cannot be complete** and adds name exclusions, a default-deny allowlist and known-secret canaries (the layers under section 5). The gitleaks pre-flight uses different rules but is also pattern based. Residual risk is nonzero (see the layers under section 5); spot-check of what is actually sent (`manifest.json` lists sent, denied and skipped files) is required before Phase 2.
 3. **Does the evidence check just create confidence theater?** A verbatim excerpt proves the text exists, not that the claim follows from it.
 4. **Is the single-session ssh stream fragile?** A dropped connection yields a partial harvest; the engine must mark partial frames, not analyze them as whole.
 5. **Is `/sys/firmware/fdt` the live tree?** It is the DT the kernel booted with, which is what we want, but GL's U-Boot may patch it at boot, so it can differ from the DTB in the image. Both are collected on purpose.

@@ -41,6 +41,14 @@ scripts/install-hooks.sh        # blocks committing .env / Anthropic keys
 cp .env.example .env            # then fill in ANTHROPIC_API_KEY yourself
 ```
 
+### Known-secret canaries and the API allowlist
+
+```sh
+just canary-init     # creates ~/.config/xe3000-open-firmware/canaries (mode 0600, empty); add one real secret per line
+```
+
+`preflight` and `analyze` abort if any canary (plain, URL-encoded, base64 or hex) appears in any input file, printing only the file and line. Keep the file outside the repo; it is mounted read-only into the analyze container and never printed. Only files matching `containers/recon-allowlist.txt` are ever sent to the API; `--allow-extra GLOB` is an explicit, logged opt-in.
+
 ## Roadmap
 
 1. **Phase 0** — scaffold + recon engine (this PR).

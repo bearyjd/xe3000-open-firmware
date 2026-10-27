@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from recon import canary
 from recon.paths import PathRefused, allowed_roots, list_input_files
 
 LEAK_EXIT_CODE = 7  # distinct from gitleaks' own error code 1
@@ -198,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--input", type=Path, action="append", help="input dir (default: harvest/redacted and unpacked)")
     ap.add_argument("--config", type=Path)
     ap.add_argument("--image-file", type=Path)
+    ap.add_argument("--no-canary", action="store_true", help="skip the known-secret canary check (fixture runs)")
     args = ap.parse_args(argv)
     root = args.root.resolve()
     dirs = [d if d.is_absolute() else root / d for d in (args.input or default_inputs(root))]
@@ -205,10 +207,16 @@ def main(argv: list[str] | None = None) -> int:
     gitleaks_bin = os.environ.get(GITLEAKS_BIN_ENV)
     podman = None if gitleaks_bin else shlex.split(os.environ.get(PODMAN_ENV, "podman"))
     try:
+        texts = {n: d.decode("utf-8", errors="replace") for _g, items in read_groups(dirs, root) for n, d in items}
+        hits = canary.check(texts, skip=args.no_canary)
+        if hits:
+            print(f"preflight: ABORT, a known-secret canary was found at (file:line; value never printed): "
+                  f"{canary.format_hits(hits)}")
+            return 1
         image = "" if gitleaks_bin else read_image(args.image_file or root / DEFAULT_IMAGE_REL)
         result = run_preflight(dirs, root, config=config, podman=podman, image=image,
                                gitleaks_bin=gitleaks_bin, runner=_default_runner())
-    except (PathRefused, PreflightError) as exc:
+    except (PathRefused, PreflightError, canary.CanaryError) as exc:
         print(f"preflight: {exc}", file=sys.stderr)
         return 2
     if result.hits:

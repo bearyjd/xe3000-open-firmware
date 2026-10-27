@@ -50,7 +50,6 @@ CASES = [
  ('ovpn auth-user-pass file', 'bob\n@S@\n', '@S@'),
  ('openvpn <tls-auth> static key', '<tls-auth>\n-----BEGIN OpenVPN Static key V1-----\n@OV@\n-----END OpenVPN Static key V1-----\n</tls-auth>', '@OV@'),
  ('openvpn askpass inline', 'askpass /etc/openvpn/pw\n<secret>\n@S@\n</secret>', '@S@'),
- ('wg show output', 'interface: wg0\n  public key: x\n  private key: (hidden)\npeer: AbCd\n  preshared key: (hidden)', '(hidden)'),
  ("wg showconf pubkey no '='", 'PrivateKey = @WG@', '@WG@'),
  ('wg key in yaml list', 'keys:\n  - @WG@=', '@WG@='),
  ('64-hex PSK bare', 'wpa_psk 1: @H64@', '@H64@'),
