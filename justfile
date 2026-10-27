@@ -5,6 +5,7 @@ set positional-arguments
 PODMAN := env_var_or_default('PODMAN', 'podman')
 ROOT   := justfile_directory()
 IMAGE  := 'localhost/xe3000-open-firmware-recon:0.1'
+UNPACK_IMAGE := 'localhost/xe3000-open-firmware-unpack:0.1'
 
 # Applied to every container run: no capabilities, no privilege escalation, bounded pids, read-only rootfs.
 hardening := "--cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --read-only --tmpfs /tmp"
@@ -51,3 +52,18 @@ dry-run RUN_ID *ARGS: build
 analyze RUN_ID *ARGS: build
     ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} IMAGE={{quote(IMAGE)}} HARDENING={{quote(hardening)}} \
       bash "{{ROOT}}/scripts/analyze-container.sh" "$@"
+
+# Firmware unpack image (pinned unblob + extractors; separate from the recon image).
+build-unpack:
+    {{PODMAN}} build -t {{UNPACK_IMAGE}} -f "{{ROOT}}/containers/unpack.Containerfile" "{{ROOT}}/containers"
+
+# Unpack a stock image or rootfs tar: just unpack path/to/image NAME. Staging in build/unpack/NAME, redacted output in unpacked/NAME.
+unpack INPUT NAME: build-unpack
+    ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} UNPACK_IMAGE={{quote(UNPACK_IMAGE)}} HARDENING={{quote(hardening)}} \
+      bash "{{ROOT}}/scripts/unpack.sh" "$1" "$2"
+
+# Real-tool end to end test (synthetic squashfs + FIT/DTB through unblob); the recon image lacks these tools, so `test` skips it.
+test-unpack: build-unpack
+    {{PODMAN}} run --rm {{hardening}} --network=none \
+      -v "{{ROOT}}/scripts:/work/scripts:ro,z" -v "{{ROOT}}/tests:/work/tests:ro,z" \
+      {{UNPACK_IMAGE}} pytest -c tests/pytest.ini -p no:cacheprovider --noconftest tests/test_unpack_e2e.py

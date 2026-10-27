@@ -36,7 +36,7 @@ def _squashfs(tmp: Path) -> Path:
     (root / "etc/config/wireless").write_text(f"config wifi-iface\n\toption key '{PLANTED}'\n")
     (root / "etc/shadow").write_text("root:*:0:0:::\n")
     (root / "etc/dropbear/dropbear_ed25519_host_key").write_bytes(b"\0hostkey")
-    (root / "bin/sh").write_bytes(b"\x7fELF")
+    (root / "bin/sh").write_bytes(b"\x7fELF\0\0\0\0")
     (root / "etc/banner").write_text("OpenWrt\n")
     os.symlink("../../../../etc/passwd", root / "etc/escape")
     os.symlink("/tmp", root / "var")
@@ -93,6 +93,6 @@ def test_squashfs_fit_and_dtb_through_unblob(tmp_path):
 def test_corrupt_image_is_a_clean_failure(tmp_path):
     image = tmp_path / "junk.bin"
     image.write_bytes(os.urandom(4096))
-    rc = unpack.main(["--input", str(image), "--work", str(tmp_path / "w"), "--out", str(tmp_path / "o")])
+    rc = unpack.main(["--input", str(image), "--work", str(tmp_path / "w"), "--out", str(tmp_path / "o"), "--salt", "s"])
     assert rc == 1
     assert not (tmp_path / "o").exists()
