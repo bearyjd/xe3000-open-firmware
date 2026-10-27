@@ -38,6 +38,11 @@ if [ -z "$pinned" ] || [ "$head" != "$pinned" ] || [ "$stamped" != "$pinned" ]; 
 	exit 1
 fi
 
+# Prepared inputs must be exactly what prepare.sh recorded, and still free of credentials, before any container run.
+# shellcheck source=lib.sh
+. "$HERE/lib.sh"
+xe3000_check_prepared_tree "$TREE" || exit 1
+
 # Network is needed for feeds and downloads. No capabilities, no privilege escalation, bounded pids.
 # shellcheck disable=SC2086
 exec $PODMAN run --rm --cap-drop=ALL --security-opt no-new-privileges --pids-limit 4096 \

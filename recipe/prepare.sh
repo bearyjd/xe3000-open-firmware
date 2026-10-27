@@ -33,35 +33,39 @@ die() {
 	exit 1
 }
 
-# Refuse to build when the overlay could carry secrets or anything not committed to git.
-check_overlay() {
+# Refuse to build when any input could carry secrets or anything not committed to git.
+# Inputs: the overlay (recipe/files), local packages (recipe/feeds), patches, seed config and pins.
+check_inputs() {
 	local dir="$HERE/files" f rel
+	# shellcheck source=lib.sh
+	. "$HERE/lib.sh"
 	[ -d "$dir" ] || die "overlay directory missing: $dir"
-	if [ -n "$(find "$dir" -mindepth 1 ! -type f ! -type d -print -quit)" ]; then
-		die "overlay contains symlinks or special files: $(find "$dir" -mindepth 1 ! -type f ! -type d -print -quit)"
-	fi
+	xe3000_check_input_dir "$dir" "overlay" || exit 1
 	while IFS= read -r -d '' f; do
 		rel="${f#"$dir"/}"
 		case "$rel" in
 		etc/* | usr/*) ;;
 		*) die "overlay file outside etc/ and usr/: $rel" ;;
 		esac
-		case "$(basename "$rel" | tr '[:upper:]' '[:lower:]')" in
-		.env | .env.* | *.pem | *.key | *.p12 | *.pfx | *.kdbx | *.secret | *.secrets | id_* | *_host_key | \
-			shadow | shadow- | passwd- | .netrc | .git* | *credential* | *secret*)
-			die "overlay file looks secret-bearing: $rel" ;;
-		esac
-		case "$rel" in
-		*/dropbear/* | */.s[s]h/* | etc/shadow* | etc/ssl/private/*) die "overlay file in a secret location: $rel" ;;
-		esac
-		if grep -qE -e '-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----' -- "$f"; then
-			die "overlay file contains private key material: $rel"
-		fi
 	done < <(find "$dir" -type f -print0)
+	xe3000_check_input_dir "$HERE/feeds/xe3000" "package" || exit 1
+	xe3000_check_input_dir "$HERE/patches" "patch" || exit 1
+	xe3000_check_input_dir "$HERE/config" "config" || exit 1
+	check_committed
+}
+
+# In a git checkout every input must be committed: no staged, unstaged, untracked or ignored changes.
+check_committed() {
+	local dirty
 	if git -C "$ROOT" rev-parse --show-toplevel >/dev/null 2>&1 && [ "$(git -C "$ROOT" rev-parse --show-toplevel)" = "$ROOT" ]; then
-		local untracked
-		untracked="$(git -C "$ROOT" ls-files --others -- recipe/files; git -C "$ROOT" ls-files --others --ignored --exclude-standard -- recipe/files)"
-		[ -z "$untracked" ] || die "overlay has untracked or ignored files (commit or remove): $(printf '%s' "$untracked" | head -1)"
+		dirty="$(git -C "$ROOT" status --porcelain --ignored --untracked-files=all -- \
+			recipe/files recipe/feeds recipe/patches recipe/config recipe/pins.env)"
+		if [ -n "$dirty" ]; then
+			case "$dirty" in
+			"??"* | "!!"*) die "inputs have untracked or ignored files (commit or remove): $(printf '%s' "$dirty" | head -1)" ;;
+			*) die "inputs have uncommitted changes (commit them first): $(printf '%s' "$dirty" | head -1)" ;;
+			esac
+		fi
 	fi
 }
 
@@ -75,7 +79,7 @@ steps    :
   1. clone the tag, verify HEAD equals the pinned commit
   2. git apply recipe/patches/tree/*.patch (kernel cmdline: pcie_port_pm=off)
   3. copy recipe/patches/kernel/*.patch to target/linux/generic/pending-$KVER (MHI PCI ID 17cb:0308, subsystem 17cb:5201 = 0x5201)
-  4. copy recipe/files to files/ (refused if untracked, ignored, symlinked or secret-looking) and recipe/feeds/xe3000/* to package/xe3000/
+  4. copy recipe/files to files/ (refused if uncommitted, untracked, ignored, symlinked, secret-looking or holding credentials) and recipe/feeds/xe3000/* to package/xe3000/
   5. seed .config from recipe/config/xe3000.config (XE3000 + gl-puli-mcu)
 nothing is flashed; feeds and compilation run later inside the build container
 PLAN
@@ -118,7 +122,7 @@ if [ "$PRINT_ONLY" -eq 1 ]; then
 	exit 0
 fi
 
-check_overlay
+check_inputs
 [ ! -e "$DEST" ] || die "destination exists: $DEST (remove it yourself to start fresh)"
 mkdir -p "$BUILD_DIR"
 
@@ -143,7 +147,12 @@ mkdir -p "$work/files" "$work/package/xe3000"
 cp -a "$HERE/files/." "$work/files/"
 cp -a "$HERE/feeds/xe3000/." "$work/package/xe3000/"
 cp "$HERE/config/xe3000.config" "$work/.config"
+cp "$HERE/config/xe3000.config" "$work/$XE3000_SEED"
+# Re-verify what was actually copied (a file could have changed between the check and the copy).
+xe3000_check_input_dir "$work/files" "overlay" || exit 1
+xe3000_check_input_dir "$work/package/xe3000" "package" || exit 1
 printf '%s\n' "$head" >"$work/.xe3000-prepared"
+xe3000_write_manifest "$work"
 
 mkdir -p "$(dirname "$DEST")"
 mv "$work" "$DEST"
