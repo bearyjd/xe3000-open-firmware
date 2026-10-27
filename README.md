@@ -30,9 +30,9 @@ Phase 0 — scaffold and LLM-assisted recon engine, built and tested on syntheti
 | `docs/prp/` | Product requirement prompts (written before implementation, with devil's-advocate review) |
 | `docs/findings/` | Generated findings (from `findings/raw/`) |
 | `scripts/` | `recon/` engine plus redaction, pre-flight and analyze entry points. Harvest tooling (`scripts/remote/collect.sh`) is Phase 1, planned, not written yet |
-| `containers/` | Podman build/analysis image, pinned gitleaks image digest, independent `gitleaks.toml` |
+| `containers/` | Podman build/analysis image, pinned gitleaks image digest, independent `gitleaks.toml`, `unpack.Containerfile` (pinned unblob + extractors) |
 | `tests/` | Offline pytest suite (FakeClient, runtime-generated fixtures) |
-| `justfile` | `build`, `test`, `preflight`, `redact`, `redact-unpacked`, `analyze`, `dry-run` (`PODMAN` env selects the podman command) |
+| `justfile` | `build`, `test`, `build-unpack`, `unpack`, `test-unpack`, `preflight`, `redact`, `redact-unpacked`, `analyze`, `dry-run` (`PODMAN` env selects the podman command) |
 | `hooks/` | Git hooks (`scripts/install-hooks.sh` enables them) |
 
 ## Setup
@@ -49,6 +49,19 @@ just canary-init     # creates ~/.config/xe3000-open-firmware/canaries (mode 060
 ```
 
 Canary values must be at least 6 characters, so 4-digit SIM PINs cannot be canaried (they are covered by the AT-command and `pin`/`puk` redaction rules only). `preflight` and `analyze` abort if any canary (plain, URL-encoded, base64 or hex) appears in any input file, printing only the file and line. Keep the file outside the repo; it is mounted read-only into the analyze container and never printed. Only files matching `containers/recon-allowlist.txt` are ever sent to the API; `--allow-extra GLOB` is an explicit, logged opt-in.
+
+### Unpacking the stock image
+
+```sh
+just unpack path/to/stock-image.bin stock-4.8.3     # NAME must be new; nothing is ever deleted
+```
+
+`scripts/unpack.sh` runs `scripts/unpack.py` in the `unpack.Containerfile` image (no network, read-only rootfs, no capabilities; the staging mount is `noexec`). Nothing from the image is executed. Tar inputs are extracted member by member and skip traversal, symlink-through-directory writes, escaping hardlinks, device nodes and setuid bits; other images go through unblob, then every escaping symlink is removed. Output:
+
+- `build/unpack/NAME/` is the unredacted staging tree, binaries included. It is gitignored and is never sent to any API.
+- `unpacked/NAME/` holds only redacted rootfs text (the engine redactor, name exclusions for shadow, keys and dropbear), the kernel FIT, the DTBs (including FIT-embedded ones), `layout.json` (names only) and reports.
+
+`just test-unpack` runs the real-tool end-to-end test (synthetic squashfs plus FIT/DTB through unblob) in the unpack image.
 
 ## Roadmap
 

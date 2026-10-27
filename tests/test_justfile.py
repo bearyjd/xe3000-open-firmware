@@ -15,7 +15,7 @@ def test_image_renamed():
     assert "localhost/xe3000-open-firmware-recon" in TEXT and "passerelle-recon" not in TEXT
 
 
-SCRIPTS = {n: (REPO / "scripts" / n).read_text() for n in ("analyze-container.sh", "redact-container.sh")}
+SCRIPTS = {n: ((REPO / "scripts" / n).read_text() if (REPO / "scripts" / n).exists() else "") for n in ("analyze-container.sh", "redact-container.sh", "unpack.sh")}
 
 
 def test_every_run_is_hardened():
@@ -23,7 +23,7 @@ def test_every_run_is_hardened():
     for flag in ("--cap-drop=ALL", "--security-opt no-new-privileges", "--pids-limit", "--read-only"):
         assert flag in line, flag
     runs = [l for l in TEXT.splitlines() if "run --rm" in l]
-    assert len(runs) == 1 and "{{hardening}}" in runs[0]  # the test recipe
+    assert len(runs) == 2 and all("{{hardening}}" in l for l in runs)  # the test and test-unpack recipes
     for name, body in SCRIPTS.items():
         run_lines = [l for l in body.splitlines() if "run --rm" in l]
         assert run_lines and all("$HARDENING" in l for l in run_lines), name
