@@ -10,6 +10,8 @@ from collections.abc import Iterable, Sequence
 from functools import lru_cache
 from pathlib import Path
 
+from recon.names import unflattened_path
+
 ALLOWLIST_REL = Path("containers") / "recon-allowlist.txt"
 
 
@@ -58,6 +60,10 @@ def relative_name(display_name: str) -> str:
 
 def is_allowed(display_name: str, patterns: Iterable[str]) -> bool:
     rel = relative_name(display_name)
+    if "%" in rel:  # harvest.sh flattened name: match the real path, and refuse ambiguous ones
+        rel = unflattened_path(rel)
+        if rel is None:
+            return False
     return any(_compile(p).fullmatch(rel) for p in patterns)
 
 

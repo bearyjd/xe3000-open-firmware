@@ -16,6 +16,7 @@ from pathlib import Path
 
 from recon.redact_ids import BLOB_RULES, IDENTIFIER_RULES, luhn_ok, pseudonymize_macs  # noqa: F401 (luhn_ok re-export)
 from recon.redact_names import SENTINEL
+from recon import names
 from recon.redact_secrets import SECRET_RULES
 
 MAC_SALT_ENV = "RECON_MAC_SALT"
@@ -46,16 +47,22 @@ def redact_text(text: str, disabled: frozenset[str] = frozenset(), salt: str = "
     return text.replace(SENTINEL, ""), counts
 
 
-def _is_excluded(rel: Path) -> bool:
-    parts = {p.lower() for p in rel.parts}
-    name = rel.name.lower()
+def _parts_excluded(parts: tuple[str, ...]) -> bool:
+    lowered = {p.lower() for p in parts}
+    name = parts[-1].lower()
     return (
         name in EXCLUDED_NAMES
         or name.startswith("serial")
-        or "dropbear" in parts
+        or "dropbear" in lowered
         or name.endswith(EXCLUDED_SUFFIXES)
         or any(f in name for f in EXCLUDED_FRAGMENTS)
     )
+
+
+def _is_excluded(rel: Path) -> bool:
+    """Plain and harvest.sh-flattened ('/' -> '%') names alike; ambiguous flattened names count as excluded."""
+    cands = names.candidates(rel.parts)
+    return cands is None or any(_parts_excluded(c) for c in cands)
 
 
 def _read_text(path: Path) -> str | None:

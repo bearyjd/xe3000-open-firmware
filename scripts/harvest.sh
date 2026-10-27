@@ -74,13 +74,28 @@ valid_name() {
   return 0
 }
 
+# Mirrors recon.redact._is_excluded for real (un-flattened) frame names: such frames are never written to disk.
+name_excluded() {
+  local last=${1##*/} seg
+  last=${last,,}
+  case $last in
+    shadow|htpasswd|chap-secrets|pap-secrets|ipsec.secrets|auth-user-pass|serial*) return 0 ;;
+    *.pem|*.key|*.psk|*.secrets|*.auth|*_host_key|*wpa_psk*|*userpass*|*auth-user-pass*|*htpasswd*) return 0 ;;
+  esac
+  local IFS=/
+  for seg in ${1,,}; do
+    if [[ $seg == dropbear ]]; then return 0; fi
+  done
+  return 1
+}
+
 # split_stream STREAM FRAMESDIR MANIFEST ; sets n_ok n_partial n_rej n_missing n_skipped saw_done
 # Only END/DONE lines carrying the nonce announced by the first @@COLLECT-VERSION line are trusted, so file content
 # cannot forge a frame boundary. Everything before that announcement is ignored.
 split_stream() {
   local stream=$1 frames=$2 manifest=$3
   local line nonce="" in_frame=0 discard=0 have_prev=0 prev="" fkind="" fname="" fpath="" extra reason rest
-  n_ok=0 n_partial=0 n_rej=0 n_missing=0 n_skipped=0 n_capped=0 n_notimeout=0 saw_done=0
+  n_ok=0 n_partial=0 n_rej=0 n_excl=0 n_missing=0 n_skipped=0 n_capped=0 n_notimeout=0 saw_done=0
 
   while IFS= read -r line || [[ -n $line ]]; do
     if [[ -z $nonce ]]; then
@@ -120,6 +135,7 @@ split_stream() {
         if [[ -n ${extra:-} || -z ${fname:-} ]]; then reason=malformed
         elif [[ ! $fkind =~ $KIND_RE ]]; then reason=bad-kind
         elif ! valid_name "$fname"; then reason=bad-name
+        elif name_excluded "$fname"; then reason=excluded
         else
           fpath="$frames/$fkind/${fname//\//%}"
           if [[ -e $fpath || -e $fpath.PARTIAL ]]; then reason=duplicate; fi
@@ -127,8 +143,13 @@ split_stream() {
         in_frame=1 have_prev=0 prev=""
         if [[ -n $reason ]]; then
           discard=1
-          n_rej=$((n_rej + 1))
-          printf 'REJECTED\t%s\t%s\n' "$reason" "$(clean "${fname:-}")" >>"$manifest"
+          if [[ $reason == excluded ]]; then
+            n_excl=$((n_excl + 1))
+            printf 'EXCLUDED\t%s\n' "$(clean "$fname")" >>"$manifest"
+          else
+            n_rej=$((n_rej + 1))
+            printf 'REJECTED\t%s\t%s\n' "$reason" "$(clean "${fname:-}")" >>"$manifest"
+          fi
         else
           discard=0
           mkdir -p "$frames/$fkind"
@@ -226,8 +247,8 @@ main() {
     cd "$OUT_BASE" && sha256sum "$ts$suffix.tar" >"$ts$suffix.tar.sha256"
   ) || die "cannot create checksum $shaf"
 
-  printf 'frames_ok=%s partial=%s rejected=%s missing=%s skipped=%s capped=%s done_marker=%s ssh_exit=%s\n' \
-    "$n_ok" "$n_partial" "$n_rej" "$n_missing" "$n_skipped" "$n_capped" "$saw_done" "$ssh_rc"
+  printf 'frames_ok=%s partial=%s rejected=%s missing=%s skipped=%s capped=%s excluded=%s done_marker=%s ssh_exit=%s\n' \
+    "$n_ok" "$n_partial" "$n_rej" "$n_missing" "$n_skipped" "$n_capped" "$n_excl" "$saw_done" "$ssh_rc"
   printf 'dir=%s\ntar=%s\nsha256=%s\n' "$dir" "$OUT_BASE/$ts$suffix.tar" "$OUT_BASE/$ts$suffix.tar.sha256"
   if ((probe)); then
     local f
