@@ -45,15 +45,15 @@ def test_absolute_symlink_chain_is_neutralised_before_nested_extraction(tmp_path
     victim.mkdir()
     tree = _tree(tmp_path)
     os.symlink(str(victim), tree / "abs")
-    os.symlink("abs", tree / "sysupgrade-x" / "hop")
-    os.symlink("../abs", tree / "sysupgrade-x" / "hop2")
+    os.symlink("../abs", tree / "sysupgrade-x" / "hop")
+    os.symlink("hop", tree / "sysupgrade-x" / "hop2")
     calls: list = []
     _install_fake_unblob(monkeypatch, tree, calls)
     rows: list = []
     assert unpack.unpack_nested(tree, tmp_path / "work", rows) == 1
     assert calls and list(victim.iterdir()) == []
     assert _unsafe_links(tree) == []
-    assert {r["path"] for r in rows if r["action"] == "skipped" and r["reason"] == "symlink"} >= {"abs", "sysupgrade-x/hop"}
+    assert {r["path"] for r in rows if r["action"] == "skipped" and r["reason"] == "symlink"} >= {"abs", "sysupgrade-x/hop", "sysupgrade-x/hop2"}
 
 
 def test_symlinked_directory_inside_the_tree_is_not_written_through(tmp_path, monkeypatch):

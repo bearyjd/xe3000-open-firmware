@@ -23,7 +23,7 @@ from recon.redact import EXCLUDED, MARKER_NAME, SKIPPED_BINARY, _load_salt, reda
 from recon.unpack_tar import UnpackError, safe_extract_tar, sanitize_tree
 
 __all__ = ["UnpackError", "Artifacts", "parse_fdt", "safe_extract_tar", "sanitize_tree", "find_artifacts", "stage_output",
-           "run_unblob", "unpack_nested", "main"]
+           "run_unblob", "neutralize_symlinks", "unpack_nested", "main"]
 
 UNBLOB_TIMEOUT_S = 3600
 ROOTFS_MARKERS = ("bin", "lib", "usr", "sbin")
@@ -159,11 +159,42 @@ def run_unblob(image: Path, work: Path, tree: Path | None = None, tag: str = "")
 NESTED_MIN_BYTES = 1 << 20
 
 
-def unpack_nested(tree: Path, work: Path) -> int:
+def _unsafe_symlinks(tree: Path) -> list[Path]:
+    """Symlinks nested extraction must not see: absolute, escaping the tree, or pointing at a directory."""
+    root = tree.resolve()
+    bad = []
+    for dirpath, dirnames, filenames in os.walk(tree, followlinks=False):
+        for name in dirnames + filenames:
+            path = Path(dirpath) / name
+            if not path.is_symlink():
+                continue
+            real = Path(os.path.realpath(path))
+            if os.readlink(path).startswith("/") or not real.is_relative_to(root) or real.is_dir():
+                bad.append(path)
+    return bad
+
+
+def neutralize_symlinks(tree: Path) -> list[dict]:
+    """Remove every symlink a nested extractor could write through (absolute, escaping, or to a directory).
+    Returns manifest rows {path, action: skipped, reason: symlink}."""
+    rows = []
+    for path in _unsafe_symlinks(tree):
+        path.unlink()
+        rows.append({"path": path.relative_to(tree).as_posix(), "action": "skipped", "reason": "symlink"})
+    return rows
+
+
+def unpack_nested(tree: Path, work: Path, rows: list[dict] | None = None) -> int:
     """A sysupgrade tar wraps the real kernel/rootfs images: when the tar yields no rootfs, run unblob over each large
-    file in it (extracting beside it). Returns how many files were tried."""
+    file in it (extracting beside it). Unsafe symlinks are removed first (recorded into `rows`) and extraction is
+    refused if any remain. Returns how many files were tried."""
     if find_artifacts(tree).rootfs is not None or shutil.which("unblob") is None:
         return 0
+    removed = neutralize_symlinks(tree)
+    if rows is not None:
+        rows.extend(removed)
+    if _unsafe_symlinks(tree):
+        raise UnpackError("unsafe symlinks remain in the staging tree; refusing nested extraction")
     files = sorted(p for p in tree.rglob("*") if p.is_file() and not p.is_symlink() and p.stat().st_size >= NESTED_MIN_BYTES)
     for i, path in enumerate(files):
         run_unblob(path, work, tree=tree, tag=f"-nested{i}")
@@ -205,7 +236,9 @@ def main(argv: list[str] | None = None) -> int:
         if tarfile.is_tarfile(args.input):
             rows = safe_extract_tar(args.input, args.work / "tree")
             tree = args.work / "tree"
-            unpack_nested(tree, args.work)
+            nested_rows: list[dict] = []
+            unpack_nested(tree, args.work, nested_rows)
+            rows = rows + nested_rows
         else:
             tree, rows = run_unblob(args.input, args.work), []
         rows = rows + sanitize_tree(tree)
