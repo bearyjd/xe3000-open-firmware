@@ -747,3 +747,26 @@ def test_artifacts_have_mode_0600(shim):
     d = only_run_dir(shim.out)
     for n in (f"{d.name}.tar", f"{d.name}.tar.sha256"):
         assert stat.S_IMODE((shim.out / n).stat().st_mode) == 0o600
+
+
+def test_harvest_never_writes_excluded_names_into_frames(shim):
+    secret = "-".join(("hunter2", "SUPERSECRET"))
+    s = stream(frame("config", "etc/config/chap-secrets", f"u * {secret} *"),
+               frame("config", "etc/config/pap-secrets", secret),
+               frame("sys", "etc/dropbear/dropbear_rsa_host_key", secret),
+               frame("hw", "sys/bus/usb/devices/1-1/serial", secret),
+               frame("sys", "etc/shadow", secret),
+               frame("sys", "etc/ssl/x.pem", secret),
+               frame("config", "etc/config/glmodem", "config modem 'm'"), done=False)
+    s += f"@@DONE-{N} 7\n"
+    r = shim(s)
+    assert r.returncode == 0, r.stderr
+    d = only_run_dir(shim.out)
+    assert "excluded=6" in r.stdout and "frames_ok=1" in r.stdout
+    for p in (d / "frames").rglob("*"):
+        if p.is_file():
+            assert secret not in p.read_text(), p
+    assert [p.name for p in (d / "frames").rglob("*") if p.is_file()] == ["etc%config%glmodem"]
+    man = (d / "manifest.tsv").read_text()
+    assert "EXCLUDED\tetc/config/chap-secrets" in man and "EXCLUDED\tetc/dropbear/dropbear_rsa_host_key" in man
+    assert secret not in man
