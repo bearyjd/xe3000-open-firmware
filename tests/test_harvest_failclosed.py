@@ -101,3 +101,57 @@ def test_crontab_is_skipped_when_canonicalization_fails(tmp_path, mode):
     (cron / "root").write_text("*/5 * * * * /usr/bin/foo.sh\n")
     out = run_fn("crontab_filtered", setup=f"CRONDIR={cron}", shim=_shim(tmp_path, READLINK_BROKEN[mode]))
     assert "/usr/bin/foo.sh" not in out
+
+
+# ---- is_excluded must not fail open when `tr` is missing, failing or silent ----------------------------------------
+
+import os  # noqa: E402
+
+from test_harvest import COLLECT  # noqa: E402
+
+TR_MODES = ["ok", "missing", "exit1", "silent"]
+MUST_EXCLUDE = ["/etc/shadow", "/etc/ppp/chap-secrets", "/x/a.pem", "/x/SERIAL", "/x/PAP-SECRETS", "/x/Id_Rsa",
+                "/etc/init.d/CLIENT.KEY", "/etc/SHADOW"]
+MUST_PASS = ["/etc/init.d/network", "/etc/hotplug.d/iface/10-modem", "/etc/config/glmodem", "/proc/cpuinfo"]
+
+
+def _is_excluded_rc(name, mode, tmp_path, shell="sh"):
+    pre = ""
+    if mode == "missing":
+        pre = "PATH=/nonexistent; "
+    elif mode in ("exit1", "silent"):
+        shim = tmp_path / f"tr-{mode}"
+        shim.mkdir(exist_ok=True)
+        (shim / "tr").write_text("#!/bin/sh\n" + ("exit 1" if mode == "exit1" else "exit 0") + "\n")
+        (shim / "tr").chmod(0o755)
+        pre = f'PATH="{shim}:$PATH"; '
+    env = {"PATH": os.environ["PATH"], "COLLECT_NO_MAIN": "1"}
+    p = subprocess.run([shell, "-c", f'. "{COLLECT}"; {pre}is_excluded "$1"', "sh", name], env=env, capture_output=True)
+    return p.returncode
+
+
+@pytest.mark.parametrize("mode", TR_MODES)
+@pytest.mark.parametrize("name", MUST_EXCLUDE)
+def test_secret_names_stay_excluded_whatever_tr_does(tmp_path, mode, name):
+    assert _is_excluded_rc(name, mode, tmp_path) == 0
+
+
+@pytest.mark.parametrize("mode", TR_MODES)
+@pytest.mark.parametrize("name", MUST_PASS)
+def test_benign_lowercase_names_still_pass_whatever_tr_does(tmp_path, mode, name):
+    assert _is_excluded_rc(name, mode, tmp_path) == 1
+
+
+def test_canon_safe_refuses_an_uppercase_target_when_tr_is_broken(tmp_path):
+    target = tmp_path / "SERIAL"
+    target.write_text("x")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target)
+    shim = tmp_path / "trx"
+    shim.mkdir()
+    (shim / "tr").write_text("#!/bin/sh\nexit 1\n")
+    (shim / "tr").chmod(0o755)
+    env = {"PATH": os.environ["PATH"], "COLLECT_NO_MAIN": "1"}
+    p = subprocess.run(["sh", "-c", f'. "{COLLECT}"; PATH="{shim}:$PATH"; canon_safe "$1"', "sh", str(link)],
+                       env=env, capture_output=True)
+    assert p.returncode == 2

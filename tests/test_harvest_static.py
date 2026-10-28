@@ -45,7 +45,7 @@ ALLOWED_EXTERNAL = {
     f"hexdump -v -e {HEXFMT} /dev/null": ({"detect_hex"}, True),
     'ls -l "$mp_d"': ({"modem_ports"}, True),
     'readlink "$mo_f"': ({"modem_owners"}, True),
-    "tr 'A-Z' 'a-z'": ({"is_excluded"}, False),
+    "tr '[:upper:]' '[:lower:]'": ({"is_excluded"}, False),
     "busybox --list": ({"probe_busybox"}, False),
     "grep -E '^(od|hexdump|timeout|head|readlink|ls|netstat|logread|lsmod|modinfo|dmesg)$'": ({"probe_busybox"}, False),
 }
@@ -460,3 +460,10 @@ def test_crontabs_only_through_the_filter_and_logs_are_opt_in():
         assert needle in flt, needle
     assert re.search(r'if \[ -n "\$COLLECT_LOGS" \]; then\n\s+frame_cmd sys cmd/logread logread', code)
     assert "COLLECT_LOGS=1) COLLECT_LOGS=1" in code
+
+
+def test_tr_uses_posix_classes_for_shellcheck_and_the_probe_lists_it():
+    assert "tr 'A-Z'" not in SRC and "tr '[:upper:]' '[:lower:]'" in SRC
+    body = SRC.split("probe_commands() {", 1)[1].split("\n}\n", 1)[0]
+    assert "pkill pgrep tr;" in body
+    assert "*serial*|*SERIAL*|*Serial*" in SRC
