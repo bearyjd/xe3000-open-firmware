@@ -1,5 +1,6 @@
 """Phase 2 rootfs inventories: deterministic, offline, counts-only logging."""
 import json
+import os
 
 import pytest
 
@@ -200,3 +201,17 @@ def test_main_refuses_build_unpack_symlinked_outside_build(tmp_path, capsys):
     (root / "build/unpack").symlink_to(outside)
     assert inventory.main(["--root", str(root), "--tree", "build/unpack"]) == 2
     assert not (root / "findings/raw/ground-truth").exists()
+
+
+def test_main_does_not_read_a_hardlink_into_harvest_raw(tmp_path, capsys):
+    root = _repo(tmp_path)
+    raw = root / "harvest/raw/etc/init.d"
+    raw.mkdir(parents=True)
+    (raw / "m").write_text("echo AT+RAWLEAK\n")
+    os.link(raw / "m", root / "unpacked/stock/rootfs/etc/init.d/m")
+    rc = inventory.main(["--root", str(root), "--tree", "unpacked/stock/rootfs"])
+    written = root / "findings/raw/ground-truth/at-commands.json"
+    leaked = written.exists() and "AT+RAWLEAK" in written.read_text()
+    assert not leaked
+    assert rc in (0, 2)
+    assert "AT+RAWLEAK" not in capsys.readouterr().out
