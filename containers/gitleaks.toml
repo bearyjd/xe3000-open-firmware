@@ -130,10 +130,11 @@ id = "uci-set-secret"
 description = "uci set/add_list of a secret-looking option"
 regex = '''(?i)\buci[ \t]+(?:-\S+[ \t]+)*(?:set|add_list)[ \t]+\S*(?:pass|psk|key|secret|token|private|auth|sid|hash|cert|username)\S*?=['"]?([^\s'"<]\S*)'''
 secretGroup = 1
-# a plain shell variable reference (${name} / $name) is a template, not a value
+# a double-quoted or bare shell variable reference (${name} / $name) is a template, not a value;
+# a single-quoted '$name' is a literal and is not exempt (judged on the whole match, which keeps the quote)
 [[rules.allowlists]]
-regexTarget = "secret"
-regexes = ['''^["']*\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)["';)]*$''']
+regexTarget = "match"
+regexes = ['''=(?:"\$|\$)(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)["';)]*$''']
 
 [[rules]]
 id = "assign-secret-name"
@@ -147,10 +148,11 @@ description = "High-entropy quoted string of 20+ characters (catches formats no 
 regex = '''['"]([A-Za-z0-9+/_=\-]{20,})['"]'''
 entropy = 3.5
 secretGroup = 1
-# path-like value: every segment is lower-case-led words, so a slash-led base64 blob does not qualify
+# path-like value: every word of every segment is short and all lower case, so a blob with any upper-case
+# letter, or with a long word, does not qualify
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''^/[a-z0-9]+(?:[._-][A-Za-z0-9]+)*(?:/[a-z0-9]+(?:[._-][A-Za-z0-9]+)*)*/?$''']
+regexes = ['''^(?:/[a-z0-9]{1,12}(?:[._-][a-z0-9]{1,12})*)+/?$''']
 # snake/kebab identifier made of alphabetic words (section and rule names)
 [[rules.allowlists]]
 regexTarget = "secret"
@@ -160,22 +162,23 @@ regexes = ['''^[a-z]{1,16}(?:[_-][a-z]{1,16}){1,5}(?:[_-]?[0-9]{1,2})?$''']
 regexTarget = "secret"
 regexes = ['''^--[a-z][a-z0-9]*(?:-[a-z0-9]+)+$''']
 
-# canonical UUID
-[[rules.allowlists]]
-regexTarget = "secret"
-regexes = ['''(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$''']
-# fstab-style 4x8 hex uuid option
+# UUIDs are exempt only in the two contexts they are benign: a filesystem uuid option (fstab, canonical or 4x8
+# form) and a --uuid command-line argument. Any other quoted UUID may be an id or key and stays flagged.
 [[rules.allowlists]]
 regexTarget = "line"
-regexes = ['''^\s*option[ \t]+uuid[ \t]+['"]?[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{8}){3}['"]?\s*$''']
-# descriptive text options whose value is words, not a blob
+regexes = ['''^\s*option[ \t]+uuid[ \t]+['"]?(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{8}){3}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})['"]?\s*$''']
 [[rules.allowlists]]
 regexTarget = "line"
-regexes = ['''^\s*(?:option|list)[ \t]+(?:name|ssid|text|description|label|title|icmp_type)[ \t]+['"](?:[A-Za-z]{1,16}[0-9]{0,6}|[0-9]{1,6}[A-Za-z]{0,6})(?:[-_ .:](?:[A-Za-z]{1,16}[0-9]{0,6}|[0-9]{1,6}[A-Za-z]{0,6})){1,8}['"]\s*$''']
-# ubus list output: method name with a type-descriptor object
+regexes = ['''^\s*[A-Za-z0-9_./-]+[ \t]+--uuid[ =]['"]?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}['"]?\s*$''']
+# descriptive text options whose value is a few dictionary-like words (Title or lower case, no inner capitals);
+# ssid is deliberately absent: SSIDs are identifying and belong to the redactor
 [[rules.allowlists]]
 regexTarget = "line"
-regexes = ['''^\s*"[A-Za-z0-9_]{1,64}"[ \t]*:[ \t]*\{(?:"[A-Za-z0-9_]+"[ \t]*:[ \t]*"(?:String|Integer|Boolean|Number|Object|Array|Double|string|integer|boolean|number|object|array|double)"[ \t]*,?[ \t]*)*\}[ \t]*,?\s*$''']
+regexes = ['''^\s*(?:option|list)[ \t]+(?:name|text|description|label|title|icmp_type)[ \t]+['"](?:[A-Z]?[a-z]{1,12}[0-9]{0,3}|[0-9]{1,4}[a-z]{0,6})(?:[-_ .:](?:[A-Z]?[a-z]{1,12}[0-9]{0,3}|[0-9]{1,4}[a-z]{0,6})){1,5}['"]\s*$''']
+# ubus list output: camelCase method name with a type-descriptor object of camelCase argument names
+[[rules.allowlists]]
+regexTarget = "line"
+regexes = ['''^\s*"[a-z]{1,12}(?:[A-Z][a-z]{1,12}){0,7}"[ \t]*:[ \t]*\{(?:"[a-z]{1,12}(?:[A-Z][a-z]{1,12}){0,7}"[ \t]*:[ \t]*"(?:String|Integer|Boolean|Number|Object|Array|Double|string|integer|boolean|number|object|array|double)"[ \t]*,?[ \t]*)+\}[ \t]*,?\s*$''']
 
 [[rules]]
 id = "generic-assigned-entropy"
@@ -186,7 +189,7 @@ secretGroup = 1
 # kernel module alias line from modinfo
 [[rules.allowlists]]
 regexTarget = "line"
-regexes = ['''^\s*alias:[ \t]+[a-z]{2,}[-:][A-Za-z0-9_*:.?\[\]-]*\s*$''']
+regexes = ['''^\s*alias:[ \t]+[a-z0-9]{2,16}(?:[-:*][a-z0-9*]{0,16})*\s*$''']
 
 [[rules]]
 id = "assign-labelled-secret"
@@ -205,10 +208,10 @@ secretGroup = 1
 [[rules.allowlists]]
 regexTarget = "secret"
 regexes = ['''(?i)^["']?(\d{1,2}|true|false|yes|no|on|off|none|null|present|absent|string|integer|boolean|number|object|array|double|crc32c?|md5|sha\d+|eap|sae|strict|relaxed|rsa|ec|ecdsa|ed25519|aes\d*|chap|pap|mschap\w*|wpa[\w+-]*|(/[^\s/]+)+)["']?$''']
-# a plain shell variable reference (${name} / $name) is a template, not a value
+# a double-quoted or bare shell variable reference (${name} / $name) is a template; single-quoted is a literal
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''^["']*\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)["';)]*$''']
+regexes = ['''^(?:"?\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)"?[;)]*)$''']
 
 [[rules]]
 id = "authorization-header"
@@ -352,11 +355,14 @@ secretGroup = 1
 # shell NAME=/path or NAME=number assignment
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''^[A-Za-z_][A-Za-z0-9_.]*=(?:[0-9]{1,16}|(?:/[a-z0-9]+(?:[._-][A-Za-z0-9]+)*)+/?)$''']
-# Title_Case / ACRONYM words joined by underscores (kernel module parameter text)
+regexes = ['''^[A-Za-z_][A-Za-z0-9_.]*=(?:[0-9]{1,16}|(?:/[a-z0-9]{1,12}(?:[._-][a-z0-9]{1,12})*)+/?)$''']
+# kernel module version string (Title_Case / ACRONYM words ending in a version), only in a module's
+# parameters/version file
 [[rules.allowlists]]
+condition = "AND"
 regexTarget = "secret"
-regexes = ['''^(?:[A-Z][a-z]+|[A-Z]{2,6})(?:_(?:[A-Z][a-z]+|[A-Z]{2,6}|[A-Z]?[0-9]+(?:\.[0-9]+)*)){2,}$''']
+paths = ['''(?:^|/)sys/module/[^/]+/parameters/version$''']
+regexes = ['''^(?:[A-Z][a-z]+|[A-Z]{2,6})(?:_(?:[A-Z][a-z]+|[A-Z]{2,6})){1,}_V?[0-9]+(?:\.[0-9]+)+$''']
 
 [[rules]]
 id = "base64-unpadded"
