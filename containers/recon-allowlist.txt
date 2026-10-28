@@ -42,3 +42,29 @@ ubus/list*
 ubus-list*
 modem/ports*
 modem/port-owners*
+
+# Phase 2: unpacked stock rootfs (unpacked/<name>/rootfs/...). Scripts, vendor Lua/RPC tables, rpcd ACL json and
+# hardware or access-control config DEFAULTS only. Still NOT here: etc/config/{wireless,network,rpcd,gl-cloud,
+# ovpnclient,wireguard*,tailscale,...}, etc/shadow, etc/dropbear, AdGuardHome, www/ bundles (too large; the offline
+# inventory in scripts/recon/inventory.py covers them). Binaries are skipped by the engine regardless.
+*/rootfs/etc/init.d/*
+*/rootfs/etc/hotplug.d/**
+*/rootfs/etc/modules.d/*
+*/rootfs/lib/wifi/*
+*/rootfs/usr/lib/lua/**
+*/rootfs/usr/lib/oui-httpd/**
+*/rootfs/usr/sbin/*
+*/rootfs/usr/share/acl.d/*.json
+*/rootfs/usr/share/rpcd/acl.d/*.json
+*/rootfs/etc/config/glmodem
+*/rootfs/etc/config/glfan
+*/rootfs/etc/config/gl_led
+*/rootfs/etc/config/mcu
+*/rootfs/etc/config/switch-button
+*/rootfs/etc/config/board_special
+*/rootfs/etc/config/parental_control
+*/rootfs/etc/config/gl_block
+*/rootfs/etc/config/gl-black_white_list
+*/rootfs/etc/config/gl_timer
+*/dtb/*.dts
+*/dtb/*.dtsi

@@ -61,6 +61,7 @@ class RunConfig:
     allow_extra: tuple[str, ...] = ()  # explicit, logged opt-in globs on top of the allowlist file
     no_canary: bool = False  # fixture runs only
     canary_file: Path | None = None
+    topic: str | None = None  # Phase 2 topic run: narrows inputs and adds the topic prompt
 
 
 @dataclass(frozen=True)
@@ -147,7 +148,7 @@ def _row(chunk_id: str, attempt: int, reason: str, finding: dict | None = None) 
 def _analyze_chunk(chunk: Chunk, truth, cfg: RunConfig, client, ledger: _Ledger,
                    first: ModelResponse | None, from_batch: bool) -> dict:
     """Validate/retry one chunk. `clean` is True only if the final attempt was fully accepted."""
-    system = prompts.system_blocks(chunk.artifact_type)
+    system = prompts.system_blocks(chunk.artifact_type, cfg.topic)
     accepted: list[dict] = []
     rejected: list[dict] = []  # rows from EVERY attempt
     feedback = None
@@ -217,7 +218,7 @@ def _submit_batch(pending, cfg, client, state, on_created, sleep) -> dict:
         state["batch_id"] = cfg.resume_batch_id
         _wait_batch(client, state["batch_id"], sleep, cfg.batch_poll_seconds, cfg.batch_timeout_seconds)
         return client.batch_results(state["batch_id"])
-    items = [(c.chunk_id, prompts.system_blocks(c.artifact_type),
+    items = [(c.chunk_id, prompts.system_blocks(c.artifact_type, cfg.topic),
               [{"role": "user", "content": prompts.user_message(c.render())}]) for c in pending]
     state["batch_id"] = client.batch_create(cfg.model, items, cfg.max_tokens)
     on_created(state["batch_id"])  # persisted before waiting, so a crash cannot orphan paid work
@@ -252,7 +253,7 @@ def _manifest(cfg: RunConfig, status: str, est: cost.Estimate, meta: dict, ledge
                                                           "cache_creation_tokens")}
     actual = round(sum(c["usd"] for c in ledger.calls), 6)
     return {
-        "run_id": cfg.run_id, "status": status, "created_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": cfg.run_id, "topic": cfg.topic, "status": status, "created_utc": datetime.now(timezone.utc).isoformat(),
         "model": cfg.model, "max_tokens": cfg.max_tokens, "synth_model": cfg.synth_model if synthesis else None,
         "prompt_version": prompts.PROMPT_VERSION, "schema_version": schema.SCHEMA_VERSION,
         "batch": cfg.batch, "batch_id": meta.get("batch_id"),
@@ -318,6 +319,8 @@ def _check_resumable(prior: dict, cfg: RunConfig, digest: str) -> None:
         raise RunRefused("cannot resume: the input tree changed since the batch was created")
     if prior.get("model") != cfg.model:
         raise RunRefused(f"cannot resume: model differs (batch was created with {prior.get('model')!r})")
+    if prior.get("topic") != cfg.topic:
+        raise RunRefused(f"cannot resume: topic differs (batch was created with {prior.get('topic')!r})")
     if prior.get("max_tokens") != cfg.max_tokens:
         raise RunRefused(f"cannot resume: max_tokens differs (batch used {prior.get('max_tokens')!r})")
 
@@ -358,8 +361,18 @@ def _patterns(cfg: RunConfig, out) -> tuple[str, ...]:
     return (*base, *cfg.allow_extra)
 
 
-def _classify_inputs(groups, patterns):
-    """Split files into sendable texts (redacted again in memory), skipped (excluded/binary) and denied."""
+def _topic_globs(cfg: RunConfig) -> tuple[str, ...] | None:
+    if cfg.topic is None:
+        return None
+    try:
+        return prompts.TOPICS[cfg.topic].globs
+    except KeyError:
+        raise RunRefused(f"unknown topic {cfg.topic!r}") from None
+
+
+def _classify_inputs(groups, patterns, topic_globs: tuple[str, ...] | None = None):
+    """Split files into sendable texts (redacted again in memory), skipped (excluded/binary/off-topic) and denied.
+    Topic globs only narrow what the allowlist already permits."""
     files, skipped, denied, texts = [], [], [], {}
     for _dir, items in groups:
         for name, data in items:
@@ -370,6 +383,8 @@ def _classify_inputs(groups, patterns):
                 skipped.append({"name": name, "reason": "binary"})
             elif not allowlist.is_allowed(name, patterns):
                 denied.append(name)
+            elif topic_globs is not None and not allowlist.is_allowed(name, topic_globs):
+                skipped.append({"name": name, "reason": "off-topic"})
             else:
                 texts[name] = redact_text(data.decode("utf-8", errors="replace"), salt=ANALYZE_SALT)[0]
     return files, skipped, sorted(denied), texts
@@ -383,7 +398,7 @@ def _load_inputs(cfg: RunConfig, out):
     if not preflight.stamp_valid(cfg.root, digest):
         raise RunRefused("no valid pre-flight stamp for the current input tree and gitleaks setup; "
                          "run `just preflight` first")
-    files, skipped, denied, texts = _classify_inputs(groups, _patterns(cfg, out))
+    files, skipped, denied, texts = _classify_inputs(groups, _patterns(cfg, out), _topic_globs(cfg))
     links = [n for d in cfg.inputs if Path(d).exists() for n in paths.list_symlinks(d, cfg.root)]
     skipped = [*skipped, *({"name": n, "reason": "symlink"} for n in links)]
     if not texts:
@@ -410,7 +425,7 @@ def _plan(cfg: RunConfig, texts: dict, results: dict):
     chunks = chunking.chunk_files(sorted(texts.items()), cfg.max_chunk_lines)
     cache = Cache(cfg.root / RESPONSES_DIR)
     keys = {c.chunk_id: cache_key(c.render(), prompts.PROMPT_VERSION, cfg.model, schema.SCHEMA_VERSION,
-                                  schema_hash=schema.schema_hash(), prompt_hash=prompts.prompt_hash(c.artifact_type),
+                                  schema_hash=schema.schema_hash(), prompt_hash=prompts.prompt_hash(c.artifact_type, cfg.topic),
                                   max_tokens=cfg.max_tokens) for c in chunks}
     for c in chunks:
         entry = cache.get(keys[c.chunk_id])
@@ -431,7 +446,7 @@ def _execute(cfg, client, pending, truth, keys, ledger, meta, results, on_create
 
 
 def _estimate(cfg, client, pending, out, cached):
-    counts = {c.chunk_id: client.count_tokens(cfg.model, prompts.system_blocks(c.artifact_type),
+    counts = {c.chunk_id: client.count_tokens(cfg.model, prompts.system_blocks(c.artifact_type, cfg.topic),
                                               [{"role": "user", "content": prompts.user_message(c.render())}])
               for c in pending}
     est = cost.estimate(cfg.model, list(counts.values()), max_tokens=cfg.max_tokens, batch=cfg.batch)

@@ -90,7 +90,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Generate docs/findings/*.md from a findings run.")
     ap.add_argument("--run-dir", required=True, type=Path)
     ap.add_argument("--out", type=Path, default=Path("docs/findings"))
+    ap.add_argument("--topic-doc", action="store_true",
+                    help="render the Phase 2 topic document (at-commands, gl-rpc-map, modem-boot-flow) from the manifest")
     args = ap.parse_args(argv)
+    if args.topic_doc:
+        from recon import topic_reports
+        return topic_reports.main(["--run-dir", str(args.run_dir), "--out", str(args.out)])
     for path in generate(args.run_dir, args.out):
         print(f"wrote {path}")
     return 0

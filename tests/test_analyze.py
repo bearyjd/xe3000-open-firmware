@@ -645,6 +645,23 @@ def test_resume_refused_if_model_or_max_tokens_differ(stamped):
     assert _manifest(stamped)["max_tokens"] == 4096
 
 
+def test_resume_refused_if_topic_differs_or_is_omitted(stamped):
+    from recon import runner
+    client = Gate(script=always_good)
+    Gate.done = False
+    with pytest.raises(runner.RunFailed):
+        runner.run(_cfg(stamped, topic="at-commands"), lambda: client, out=lambda _l: None, sleep=lambda _s: None)
+    client.done = True
+    calls_before = len(client.create_calls)
+    for other in (None, "modem-boot-flow"):
+        with pytest.raises(runner.RunRefused, match="topic"):
+            runner.run(_cfg(stamped, resume_batch_id="b1", topic=other), lambda: client, out=lambda _l: None,
+                       sleep=lambda _s: None)
+    assert len(client.create_calls) == calls_before
+    assert _manifest(stamped)["topic"] == "at-commands"
+    assert _manifest(stamped)["status"] == "batch-pending"
+
+
 def test_excluded_files_are_never_sent_and_listed_as_skipped(root, stamp):
     one_file_root(root, stamp)
     up = root / "unpacked"
