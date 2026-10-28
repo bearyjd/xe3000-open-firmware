@@ -16,6 +16,7 @@ from pathlib import Path
 
 from recon.redact_ids import BLOB_RULES, IDENTIFIER_RULES, luhn_ok, pseudonymize_macs  # noqa: F401 (luhn_ok re-export)
 from recon.redact_names import SENTINEL
+from recon import names
 from recon.redact_secrets import SECRET_RULES
 
 MAC_SALT_ENV = "RECON_MAC_SALT"
@@ -28,9 +29,6 @@ MARKER_NAME = ".recon-redacted"
 RULES = (*SECRET_RULES, *IDENTIFIER_RULES, *BLOB_RULES)
 RULE_NAMES = tuple(dict.fromkeys(name for name, _ in RULES)) + ("mac",)
 
-EXCLUDED_NAMES = frozenset({"shadow", "htpasswd", "chap-secrets", "pap-secrets", "ipsec.secrets", "auth-user-pass"})
-EXCLUDED_SUFFIXES = (".pem", ".key", ".psk", ".secrets", ".auth", "_host_key")
-EXCLUDED_FRAGMENTS = ("wpa_psk", "userpass", "auth-user-pass", "htpasswd")
 
 
 def redact_text(text: str, disabled: frozenset[str] = frozenset(), salt: str = "") -> tuple[str, Counter]:
@@ -47,15 +45,8 @@ def redact_text(text: str, disabled: frozenset[str] = frozenset(), salt: str = "
 
 
 def _is_excluded(rel: Path) -> bool:
-    parts = {p.lower() for p in rel.parts}
-    name = rel.name.lower()
-    return (
-        name in EXCLUDED_NAMES
-        or name.startswith("serial")
-        or "dropbear" in parts
-        or name.endswith(EXCLUDED_SUFFIXES)
-        or any(f in name for f in EXCLUDED_FRAGMENTS)
-    )
+    """Plain and harvest.sh-flattened ('/' -> '%') names alike; see recon/names.py for the canonical list."""
+    return names.is_excluded(rel.parts)
 
 
 def _read_text(path: Path) -> str | None:

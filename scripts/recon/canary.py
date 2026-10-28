@@ -66,8 +66,15 @@ def load_canaries(path: Path) -> tuple[str, ...] | None:
     return tuple(values)
 
 
+def _is_marker(name: str) -> bool:
+    rel = name.partition("/")[2]
+    base = rel.rpartition("/")[2]
+    flattened = base.replace("%", "/") if "%" in base else None  # harvest.sh stores etc/glversion as etc%glversion
+    return rel in REAL_MARKER_NAMES or name.endswith("/.recon-redacted") or flattened in REAL_MARKER_NAMES
+
+
 def has_real_harvest_marker(names: Sequence[str]) -> bool:
-    return any(n.partition("/")[2] in REAL_MARKER_NAMES or n.endswith("/.recon-redacted") for n in names)
+    return any(_is_marker(n) for n in names)
 
 
 def _b64_fragments(data: bytes) -> set[str]:

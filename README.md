@@ -19,6 +19,7 @@ Phase 0 — scaffold and LLM-assisted recon engine, built and tested on syntheti
 - No AT commands to the modem.
 - Secrets (shadow, host keys, Wi-Fi/VPN keys, PPPoE creds, tokens, ICCID/IMSI/IMEI) are never collected, or are redacted before leaving `harvest/raw/`.
 - `harvest/raw/` is gitignored and **never** sent to any external API.
+- `scripts/harvest.sh` writes only under `harvest/raw/`; `HARVEST_OUT` may select a subdirectory there but is refused if it resolves (after `..`/symlinks) anywhere else.
 - No GL proprietary binaries or UI in the repo: findings and notes only.
 - Every router-touching step is shown as an exact command list and approved first.
 
