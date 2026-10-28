@@ -178,7 +178,7 @@ def test_preflight_aborts_on_exactly_the_unredacted_class(root, tmp_path, sample
 
 @pytest.mark.requires_podman
 def test_podman_container_path_catches_secret(root, tmp_path):
-    _redacted_root(root, tmp_path, ("wifi-psk",))
+    _redacted_root(root, tmp_path, ("wifi-psk", "labelled-secret"))
     res = preflight.run_preflight([root / "harvest" / "redacted"], root, config=GITLEAKS_TOML,
                                   podman=[shutil.which("podman")], image=preflight.read_image(IMAGE_FILE),
                                   gitleaks_bin=None)

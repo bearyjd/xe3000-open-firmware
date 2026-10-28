@@ -112,3 +112,82 @@ def test_runner_classifies_flattened_secret_files_as_excluded():
         "redacted/etc/config/chap-secrets", "redacted/frames/config/etc%config%chap-secrets"]
     assert list(texts) == ["redacted/frames/config/etc%config%glmodem"] and not denied
     assert SECRET not in "".join(texts.values())
+
+
+# ---- review round: wrapper-only decoding, .PARTIAL, canonical list, canary markers ---------------------------------
+
+from recon import canary, names  # noqa: E402
+
+
+@pytest.mark.parametrize("rel, expected", [
+    ("frames/sys/etc%init.d%x", "etc/init.d/x"),          # validated harvest wrapper frames/<kind>/
+    ("sys/etc%init.d%x", "etc/init.d/x"),                 # raw/<ts>/frames used as the redaction root: <kind>/
+    ("etc%init.d%x", "etc/init.d/x"),
+    ("frames/hw-bin/sys%firmware%fdt", "sys/firmware/fdt"),
+    ("private/etc%config%glmodem", "private/etc/config/glmodem"),   # unknown parents are kept, never discarded
+    ("odd/etc%config%glmodem", "odd/etc/config/glmodem"),
+    ("frames/bogus/etc%init.d%x", "frames/bogus/etc/init.d/x"),     # frames/<unknown kind>/ is not a wrapper
+    ("frames/sys/extra/etc%init.d%x", "frames/sys/extra/etc/init.d/x"),
+    ("etc/config/glmodem", "etc/config/glmodem"),
+])
+def test_only_validated_wrappers_are_dropped_when_decoding(rel, expected):
+    assert names.unflattened_path(rel) == expected
+
+
+def test_unknown_parent_directories_do_not_reach_the_allowlist():
+    patterns = allowlist.load_patterns(REPO / "containers" / "recon-allowlist.txt")
+    assert not allowlist.is_allowed("unpacked/private/etc%config%glmodem", patterns)
+    assert not allowlist.is_allowed("unpacked/odd/etc%config%glmodem", patterns)
+    assert not allowlist.is_allowed("redacted/frames/bogus/etc%config%glmodem", patterns)
+    assert allowlist.is_allowed("redacted/frames/config/etc%config%glmodem", patterns)
+    assert allowlist.is_allowed("redacted/config/etc%config%glmodem", patterns)
+    assert redact._is_excluded(Path("private/etc%config%glmodem"))
+    assert redact._is_excluded(Path("unpacked/private/etc/config/glmodem"))
+
+
+PARTIAL_FORMS = [
+    "frames/sys/etc%init.d%chap-secrets.PARTIAL",
+    "frames/sys/etc%init.d%glmodem.PARTIAL",
+    "etc/init.d/glmodem.PARTIAL",
+    "frames/sys/etc%init.d%glmodem.partial",
+]
+
+
+@pytest.mark.parametrize("name", PARTIAL_FORMS)
+def test_partial_frames_are_never_sent_or_redacted_through(name, tmp_path):
+    assert redact._is_excluded(Path(name))
+    assert not allowlist.is_allowed("redacted/" + name, ["etc/init.d/*", "**"])
+    groups = [("redacted", [("redacted/" + name, b"x\n")])]
+    _f, skipped, denied, texts = runner._classify_inputs(groups, ["etc/init.d/*"])
+    assert [s["reason"] for s in skipped] == ["excluded"] and not texts and not denied
+
+
+CANONICAL_EXCLUDED = [
+    "etc/ssh/ssh_host_rsa_key", "etc%ssh%ssh_host_rsa_key", "etc/ssh/my_host_key_old", "root/.ssh/id_rsa",
+    "root%.ssh%id_rsa", "root/.ssh/id_ed25519", "root/.ssh/id_dsa", "root%.ssh%id_ecdsa", "sys/board_serial",
+    "sys%class%dmi%board_serial", "sys/class/x/product_serial_no", "etc/config/wg0.conf", "etc%config%wg0.conf",
+    "etc/wireguard/wgvpn.conf", "etc/vpn/client.wg", "etc%vpn%client.wg", "etc/private/anything",
+    "etc%private%anything", "etc/ssl/private/x", "etc/dropbear/x", "etc/gshadow", "etc/shadow-", "etc%shadow-",
+]
+CANONICAL_BENIGN = [
+    "etc/config/glmodem", "etc%config%glmodem", "etc/config/network", "etc/config/wgsomething.cfg",
+    "etc/init.d/gl_modem", "proc/cmdline", "etc%config%led",
+]
+
+
+@pytest.mark.parametrize("name", CANONICAL_EXCLUDED)
+def test_canonical_exclusion_list_covers_collect_sh_names(name):
+    assert redact._is_excluded(Path(name)), name
+
+
+@pytest.mark.parametrize("name", CANONICAL_BENIGN)
+def test_canonical_list_keeps_benign_names(name):
+    assert not redact._is_excluded(Path(name)), name
+
+
+def test_canary_marker_recognises_flattened_names():
+    for n in ("redacted/frames/ident/etc%glversion", "redacted/frames/ident/etc%openwrt_release",
+              "redacted/etc%glversion", "redacted/ident/etc%glversion", "unpacked/odd/etc%glversion"):
+        assert canary.has_real_harvest_marker([n]), n
+    assert canary.has_real_harvest_marker(["redacted/etc/glversion"])
+    assert not canary.has_real_harvest_marker(["redacted/frames/ident/proc%cpuinfo"])
