@@ -55,7 +55,9 @@ def test_printable_strings():
 
 def test_rpc_methods_from_all_sources():
     methods = {(m["object"], m["method"]): m for m in inventory.build(TEXTS)["rpc-methods"]["methods"]}
-    assert methods[("fan", "set_test")]["source"] in {"lua-doc", "lua-table", "example"}
+    sources = {m["source"] for m in inventory.build(TEXTS)["rpc-methods"]["methods"]
+               if (m["object"], m["method"]) == ("fan", "set_test")}
+    assert {"lua-doc", "lua-table", "example", "acl"} <= sources
     assert ("fan", "get_status") in methods  # table entry without a doc header
     acl = [m for m in inventory.build(TEXTS)["rpc-methods"]["methods"] if m["source"] == "acl"]
     assert {(m["object"], m["method"], m["access"]) for m in acl} == {
@@ -152,3 +154,14 @@ def test_main_refuses_raw_and_outside_trees(tmp_path, capsys, tree):
     assert inventory.main(["--root", str(root), "--tree", tree]) == 2
     assert "refused" in capsys.readouterr().err
     assert not (root / "findings/raw/ground-truth").exists()
+
+
+def test_main_accepts_the_build_staging_tree_for_binary_strings(tmp_path, capsys):
+    root = _repo(tmp_path)
+    sbin = root / "build/unpack/stock/rootfs/usr/sbin"
+    sbin.mkdir(parents=True)
+    (sbin / "modem_tool").write_bytes(b"\x7fELF\x00AT+QCFG=1\x00")
+    assert inventory.main(["--root", str(root), "--tree", "build/unpack/stock/rootfs"]) == 0
+    assert "at-commands: 1" in capsys.readouterr().out
+    doc = json.loads((root / "findings/raw/ground-truth/at-commands.json").read_text())
+    assert doc["AT+QCFG"][0]["file"] == "build/unpack/stock/rootfs/usr/sbin/modem_tool"

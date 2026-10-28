@@ -8,7 +8,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from recon import canary, cost, runner
+from recon import canary, cost, prompts, runner
 from recon.client import ReconClient, load_env
 from recon.paths import PathRefused, allowed_roots
 from recon.scrub import scrub
@@ -62,6 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--canary-file", type=Path, help="canary file (default: $RECON_CANARY_FILE or ~/.config/...)")
     ap.add_argument("--synthesize", action="store_true", help="final gap-report pass on the Opus model")
     ap.add_argument("--cheap", action="store_true", help="use LLM_MODEL_CHEAP (bulk triage)")
+    ap.add_argument("--topic", choices=prompts.topic_names(),
+                    help="Phase 2 topic run: use the topic prompt and only the topic's subset of allowlisted files")
     ap.add_argument("--env-file", type=Path, help="dotenv file to load; contents are never printed")
     return ap
 
@@ -77,7 +79,7 @@ def _config(args: argparse.Namespace) -> runner.RunConfig:
                             dry_run=args.dry_run, batch=args.batch or bool(args.resume_batch),
                             resume_batch_id=args.resume_batch, allow_extra=tuple(args.allow_extra),
                             no_canary=args.no_canary, canary_file=args.canary_file, batch_timeout_seconds=args.batch_timeout,
-                            batch_poll_seconds=args.batch_poll, synthesize=args.synthesize)
+                            batch_poll_seconds=args.batch_poll, synthesize=args.synthesize, topic=args.topic)
 
 
 def _lenient_sanitizer(args: argparse.Namespace) -> canary.Sanitizer:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 
 from recon.chunking import OTHER
 from recon.schema import CATEGORIES
@@ -37,18 +38,79 @@ _TASKS: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class Topic:
+    """A Phase 2 topic run: extra focus text plus the globs (same syntax as the allowlist) that narrow the inputs.
+    The allowlist still decides what may be sent; a topic can only select a subset of it."""
+    focus: str
+    globs: tuple[str, ...]
+
+
+_ANTI_INVENT = (" Name only AT commands, GPIO numbers, ubus/RPC methods and module names that appear literally in "
+                "the input, and keep every claim under 300 characters.")
+_ROOTFS_SCRIPTS = ("**/etc/init.d/*", "**/etc/rc.d/*", "**/etc/hotplug.d/**", "**/usr/sbin/*", "**/usr/lib/lua/**")
+
+TOPICS: dict[str, Topic] = {
+    "at-commands": Topic(
+        "Topic at-commands: list every AT command the stock firmware sends to the modem, which script or program "
+        "sends it, in what order, and what the surrounding code does with the reply (retries, timeouts, port used)."
+        + _ANTI_INVENT,
+        (*_ROOTFS_SCRIPTS, "**/etc/config/glmodem", "**/etc/modules.d/*", "**/modem/**")),
+    "gl-rpc-map": Topic(
+        "Topic gl-rpc-map: map the vendor RPC/ubus surface: object, method, parameters, and the service or hardware "
+        "each method drives, plus which rpcd ACL grants it. Include a section on network access control methods: "
+        "client lists, blocking or allowing a client, black/white lists, parental control and schedules; say which "
+        "UCI config each one reads or writes." + _ANTI_INVENT,
+        ("**/usr/lib/oui-httpd/**", "**/usr/lib/lua/**", "**/usr/share/acl.d/*.json", "**/usr/share/rpcd/acl.d/*.json",
+         "**/etc/config/parental_control", "**/etc/config/gl_block", "**/etc/config/gl-black_white_list",
+         "**/etc/config/gl_timer", "ubus/list*", "ubus-list*")),
+    "modem-boot-flow": Topic(
+        "Topic modem-boot-flow: reconstruct the order in which the modem is powered, enumerated, configured and "
+        "brought up at boot and on SIM or network events: init.d START/STOP order, hotplug triggers, GPIO power "
+        "and reset lines, module loads, and which step waits on which." + _ANTI_INVENT,
+        (*_ROOTFS_SCRIPTS, "**/etc/config/glmodem", "**/etc/modules.d/*", "**/var/dmesg*", "**/dmesg*",
+         "**/modem/**", "**/proc/modules")),
+    "fan-led-mcu-battery": Topic(
+        "Topic fan-led-mcu-battery: find how the fan, LEDs, the MCU link and battery or power monitoring are "
+        "controlled: sysfs paths, GPIO or serial protocol, thresholds, and which daemon or RPC method owns each."
+        + _ANTI_INVENT,
+        (*_ROOTFS_SCRIPTS, "**/usr/lib/oui-httpd/**", "**/etc/config/glfan", "**/etc/config/gl_led",
+         "**/etc/config/mcu", "**/etc/config/switch-button", "**/etc/config/board_special", "**/*.dts", "**/*.dtsi")),
+    "wifi-driver": Topic(
+        "Topic wifi-driver: find Wi-Fi driver and firmware handling: module names and load order, EEPROM or "
+        "calibration data sources, hotplug and wifi detect scripts, and vendor changes to wireless bring-up."
+        + _ANTI_INVENT,
+        ("**/etc/init.d/*", "**/etc/hotplug.d/**", "**/lib/wifi/*", "**/etc/modules.d/*", "**/var/dmesg*",
+         "**/dmesg*", "**/proc/modules", "**/usr/lib/lua/**")),
+}
+
+
+def topic_names() -> tuple[str, ...]:
+    return tuple(TOPICS)
+
+
+def _topic(topic: str | None) -> Topic | None:
+    if topic is None:
+        return None
+    if topic not in TOPICS:
+        raise ValueError(f"unknown topic {topic!r}; choose one of {', '.join(TOPICS)}")
+    return TOPICS[topic]
+
+
 def task_prompt(artifact_type: str) -> str:
     return _TASKS.get(artifact_type, _TASKS[OTHER])
 
 
-def system_blocks(artifact_type: str) -> tuple[str, str]:
+def system_blocks(artifact_type: str, topic: str | None = None) -> tuple[str, str]:
     """(shared system prompt, per-task instructions). The client puts cache_control on the last block."""
-    return SYSTEM_SHARED, task_prompt(artifact_type)
+    chosen = _topic(topic)
+    task = task_prompt(artifact_type)
+    return SYSTEM_SHARED, task if chosen is None else f"{task}\n{chosen.focus}"
 
 
-def prompt_hash(artifact_type: str) -> str:
-    """Hash of the full prompt text sent for this artifact type (part of the cache key)."""
-    return hashlib.sha256("\0".join(system_blocks(artifact_type)).encode()).hexdigest()
+def prompt_hash(artifact_type: str, topic: str | None = None) -> str:
+    """Hash of the full prompt text sent for this artifact type and topic (part of the cache key)."""
+    return hashlib.sha256("\0".join(system_blocks(artifact_type, topic)).encode()).hexdigest()
 
 
 def user_message(chunk_text: str, feedback: str | None = None) -> str:
