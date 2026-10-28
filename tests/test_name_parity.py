@@ -19,6 +19,9 @@ POOL = [
     "pap-secrets", "ipsec.secrets", "shadow", "shadow-", "gshadow", "htpasswd", "userpass.txt", "wpa_psk.conf",
     "auth-user-pass", "a.pem", "b.key", "c.psk", "d.secrets", "e.auth", "glmodem", "network", "led", "fan",
     "cpuinfo", "dmesg", "10-modem", "gl_modem", "notes.txt", "keyboard", "pem", "keys", "publickey", "wifi",
+    "chap-secrets.bak", "CHAP-SECRETS.OLD", "pap-secrets~", "ipsec.secrets.orig", "CLIENT.KEY", "shadow.d", "Shadow.dpkg-old",
+    "shadowsocks", "passwd-", "authorized_keys", "known_hosts", "wpa_supplicant.conf", "x.psk.bak", "a.pem.old", "wg0.conf.bak",
+    "PRIVATE", "DropBear", "Etc",
 ]
 
 
@@ -56,7 +59,8 @@ def test_harvest_sh_exclusions_equal_python_exclusions():
 
 
 @pytest.mark.parametrize("name", ["etc/ssh/ssh_host_rsa_key", "root/.ssh/id_rsa", "sys/board_serial", "etc/config/wg0.conf",
-                                  "etc/private/x", "etc/vpn/c.wg", "etc/ssh/my_host_key_old"])
+                                  "etc/private/x", "etc/vpn/c.wg", "etc/ssh/my_host_key_old",
+                                  "etc/shadow.d/x", "etc/init.d/CLIENT.KEY", "etc/ppp/chap-secrets.bak"])
 def test_review_examples_are_excluded_by_all_three(name):
     assert redact._is_excluded(Path(name))
     script = f'. "{COLLECT}"; is_excluded "/{name}"'

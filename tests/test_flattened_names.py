@@ -191,3 +191,35 @@ def test_canary_marker_recognises_flattened_names():
         assert canary.has_real_harvest_marker([n]), n
     assert canary.has_real_harvest_marker(["redacted/etc/glversion"])
     assert not canary.has_real_harvest_marker(["redacted/frames/ident/proc%cpuinfo"])
+
+
+BACKUP_FORMS = [
+    "frames/sys/etc%init.d%chap-secrets.bak", "frames/sys/etc%init.d%chap-secrets.old", "frames/sys/etc%init.d%chap-secrets~",
+    "frames/sys/etc%init.d%chap-secrets.orig", "frames/sys/etc%init.d%chap-secrets.dpkg-old",
+    "frames/sys/etc%init.d%CHAP-SECRETS.BAK", "etc/ppp/pap-secrets.old", "frames/config/etc%ppp%ipsec.secrets.bak",
+    "frames/sys/etc%shadow.bak", "etc/shadow-", "etc/passwd-", "frames/sys/etc%passwd-", "etc/shadow.d/x",
+    "frames/sys/etc%shadow.d%x", "root/.ssh/authorized_keys", "frames/sys/root%.ssh%authorized_keys.old",
+    "etc/wpa_supplicant.conf", "frames/sys/etc%wpa_supplicant-wlan0.conf", "etc/ppp/peer.psk.bak",
+    "etc/ppp/vpn.secrets.old", "etc/ppp/login.auth~", "etc/ssl/server.pem.bak", "etc/ssl/server.key.orig",
+    "frames/sys/etc%htpasswd.old", "etc/init.d/CLIENT.KEY", "etc/config/wg0.conf.bak",
+]
+BENIGN_REAL = ["etc/init.d/network", "etc/hotplug.d/iface/10-modem", "frames/sys/etc%hotplug.d%iface%10-modem",
+               "frames/sys/etc%init.d%gl_modem", "etc/config/glmodem", "etc/init.d/dnsmasq"]
+
+
+@pytest.mark.parametrize("name", BACKUP_FORMS)
+def test_credential_stems_are_excluded_with_any_backup_suffix(name):
+    assert redact._is_excluded(Path(name)), name
+
+
+@pytest.mark.parametrize("name", BENIGN_REAL)
+def test_realistic_benign_names_still_pass(name):
+    assert not redact._is_excluded(Path(name)), name
+
+
+def test_backup_variant_of_chap_secrets_is_never_sent():
+    patterns = allowlist.load_patterns(REPO / "containers" / "recon-allowlist.txt")
+    name = "redacted/frames/sys/etc%init.d%chap-secrets.bak"
+    data = ("alice provider " + "hunter" + "2 *\n").encode()
+    _f, skipped, denied, texts = runner._classify_inputs([("redacted", [(name, data)])], patterns)
+    assert [s["reason"] for s in skipped] == ["excluded"] and not texts
