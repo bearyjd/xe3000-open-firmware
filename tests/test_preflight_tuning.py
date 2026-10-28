@@ -36,10 +36,9 @@ BENIGN = {
         "/usr/bin/example.sh 'example_action_trigger' \"${iface}\" 'up'",
         "",
     ])),
-    "text-and-ssid-options": ("etc/config/wireless", "\n".join([
+    "text-options": ("etc/config/firewall", "\n".join([
         "config rule",
         "\toption name 'Allow-Example-Probe-Reply'",
-        "\toption ssid 'EX-AB1234-567-8C-Xyzab'",
         "",
     ])),
     "uuids": ("etc/config/fstab", "\n".join([
@@ -86,6 +85,10 @@ BENIGN = {
 }
 
 
+def _uuid() -> str:
+    return "-".join(["".join(["7c9e", "6679"]), "7425", "40de", "944b", "".join(["e07fc1f9", "0ae7"])])
+
+
 def _blob() -> str:
     return "".join(["q8Xv2L", "mZ9aKd", "4TrYb7", "PwNc3H", "s5Jf6"])  # 29 chars, mixed case + digits
 
@@ -105,6 +108,25 @@ NEGATIVE = {
     "cli-option-lookalike-blob": ("etc/n15.txt", f'xappend "--{_blob().lower()}"\n'),
     "alias-line-with-blob": ("etc/n12.txt", f"alias:\t\t{_blob()}\n"),
     "ubus-style-key-with-blob-value": ("etc/n13.txt", f'\t"getExampleState":{{"switch":"{_blob()}"}}\n'),
+    "path-lowercase-lead-then-blob": ("etc/n16.txt", f'build_ref = "/a-{_blob()}"\n'),
+    "path-url-lead-then-blob": ("etc/n17.txt", f'url = "/api/v1/x-{_blob()}"\n'),
+    "path-json-lead-then-blob": ("etc/n18.txt", f'"cloud": "/k-{_blob()}"\n'),
+    "path-multi-segment-blob": ("etc/n19.txt", f'build = "/0_{_blob()}/k3-{_blob()}"\n'),
+    "path-tmp-prefix-then-blob": ("etc/n20.txt", f'build_ref = "/tmp/a-{_blob()}"\n'),
+    "var-assignment-path-lead-then-blob": ("etc/n21.txt", f"API_BLOB=/a-{_blob()}\n"),
+    "alias-prefix-then-mixed-blob": ("etc/n22.txt", f"alias:\t\tgh-{_blob()}\n"),
+    "ubus-blob-as-outer-key": ("etc/n23.txt", f'\t"{_blob()}":{{}}\n'),
+    "ubus-blob-as-inner-key": ("etc/n24.txt", f'\t"x":{{"{_blob()}":"String"}}\n'),
+    "ubus-letters-only-blob-key": ("etc/n25.txt", '\t"XkQzMvBtPlRwNhSdQfJzWq":{"a":"String"}\n'),
+    "ssid-option-is-not-allowlisted": ("etc/n26.txt", "config wifi-iface\n\toption ssid 'XkQzMvBtPlRw-NhSdQfJzWq'\n"),
+    "name-option-mixed-case-words": ("etc/n27.txt", "config rule\n\toption name 'Xq-Kd-Tr-Pw-Nc-Hs-Jf-Lm'\n"),
+    "text-option-long-words": ("etc/n28.txt", "config rule\n\tlist text 'Abcdefghijklmnop-Qrstuvwxyzabcdef-Ghijklmnop'\n"),
+    "uuid-in-json-key-device-bind": ("etc/n29.txt", f'{{"device_bind": "{_uuid()}"}}\n'),
+    "uuid-in-quoted-assignment": ("etc/n30.txt", f'cloud_ref = "{_uuid()}"\n'),
+    "single-quoted-literal-in-uci-set": ("etc/n31.txt", "uci set example.section.key='$actualLiteral1'\n"),
+    "single-quoted-literal-in-assignment": ("etc/n32.txt", "API_KEY='$actualLiteral1'\n"),
+    "module-passphrase-outside-parameters": ("etc/n33.txt", "Velvet_Quick_Harbor_Sphinx\n"),
+    "module-passphrase-in-version-file": ("sys/module/example/parameters/version", "Velvet_Quick_Harbor_Sphinx\n"),
     "psk-option-with-real-value": ("etc/n14.txt", f"config x\n\toption wpa_psk '{_blob()[:12]}'\n"),
 }
 
