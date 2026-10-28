@@ -165,3 +165,38 @@ def test_main_accepts_the_build_staging_tree_for_binary_strings(tmp_path, capsys
     assert "at-commands: 1" in capsys.readouterr().out
     doc = json.loads((root / "findings/raw/ground-truth/at-commands.json").read_text())
     assert doc["AT+QCFG"][0]["file"] == "build/unpack/stock/rootfs/usr/sbin/modem_tool"
+
+
+def _raw_symlinked_build(tmp_path):
+    root = _repo(tmp_path)
+    (root / "harvest/raw/etc/init.d").mkdir(parents=True)
+    (root / "harvest/raw/etc/init.d/x").write_text("echo AT+RAWLEAK\n")
+    (root / "build").symlink_to(root / "harvest/raw")
+    return root
+
+
+@pytest.mark.parametrize("tree", ["build", "harvest/raw", "build/etc"])
+def test_main_refuses_raw_even_when_build_is_a_symlink_to_it(tmp_path, capsys, tree):
+    root = _raw_symlinked_build(tmp_path)
+    assert inventory.main(["--root", str(root), "--tree", tree]) == 2
+    assert "refused" in capsys.readouterr().err
+    assert not (root / "findings/raw/ground-truth").exists()
+
+
+def test_main_accepts_only_build_unpack_not_all_of_build(tmp_path, capsys):
+    root = _repo(tmp_path)
+    (root / "build/other").mkdir(parents=True)
+    (root / "build/other/f").write_bytes(b"AT+NOPE\x00")
+    assert inventory.main(["--root", str(root), "--tree", "build/other"]) == 2
+    assert not (root / "findings/raw/ground-truth").exists()
+
+
+def test_main_refuses_build_unpack_symlinked_outside_build(tmp_path, capsys):
+    root = _repo(tmp_path)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "f").write_bytes(b"AT+NOPE\x00")
+    (root / "build").mkdir()
+    (root / "build/unpack").symlink_to(outside)
+    assert inventory.main(["--root", str(root), "--tree", "build/unpack"]) == 2
+    assert not (root / "findings/raw/ground-truth").exists()

@@ -132,3 +132,18 @@ def test_cache_key_differs_between_topics(root, stamp):
                     client_factory=lambda: c2) == 0
     # same rpc file, different prompt: the topic response must not be served from cache
     assert any("RPC-MARK-LINE" in json.dumps(c[2]) for c in c2.create_calls)
+
+
+def test_topic_globs_never_widen_the_allowlist(root, stamp):
+    base = root / "unpacked" / "stock" / "rootfs"
+    for rel in ("etc/rc.d/S99gl_modem", "var/dmesg.log"):
+        (base / rel).parent.mkdir(parents=True, exist_ok=True)
+        (base / rel).write_text("echo DENIED-TOPIC-MARK\n")
+    (base / "usr/lib/oui-httpd/rpc").mkdir(parents=True, exist_ok=True)
+    (base / "usr/lib/oui-httpd/rpc/fan").write_text("M.set_test = function(p)\n  return RPC-MARK-LINE\nend\n")
+    stamp(root)
+    client = FakeClient(script=always_good)
+    assert go(root, client, "--topic", "modem-boot-flow") == 0
+    assert "DENIED-TOPIC-MARK" not in json.dumps([c[2] for c in client.create_calls])
+    manifest = json.loads((root / "findings/raw/t1/manifest.json").read_text())
+    assert {"unpacked/stock/rootfs/etc/rc.d/S99gl_modem", "unpacked/stock/rootfs/var/dmesg.log"} <= set(manifest["denied"])
