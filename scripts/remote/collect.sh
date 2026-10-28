@@ -67,13 +67,17 @@ skipped() {
 }
 
 # Hard exclusions at collection (PRP section 5): never read these, whatever asks.
+# Mirrors recon/names.py and harvest.sh name_excluded (tests/test_name_parity.py fuzzes the three).
 is_excluded() {
   case $1 in
     /etc/shadow*|/etc/gshadow*|/etc/dropbear|/etc/dropbear/*) return 0 ;;
-    */private/*|*host_key*|*.pem|*.key) return 0 ;;
-    *id_rsa*|*id_dsa*|*id_ecdsa*|*id_ed25519*) return 0 ;;
+    */private|*/private/*) return 0 ;;
   esac
   case ${1##*/} in
+    shadow*|gshadow*|htpasswd|chap-secrets|pap-secrets|ipsec.secrets|auth-user-pass) return 0 ;;
+    id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|wg*.conf) return 0 ;;
+    *.pem|*.key|*.psk|*.secrets|*.auth|*_host_key|*.wg) return 0 ;;
+    *wpa_psk*|*userpass*|*auth-user-pass*|*htpasswd*|*host_key*|*ssh_host_*) return 0 ;;
     *serial*|*SERIAL*|*Serial*) return 0 ;;
   esac
   return 1

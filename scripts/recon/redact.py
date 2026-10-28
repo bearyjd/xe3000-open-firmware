@@ -29,9 +29,6 @@ MARKER_NAME = ".recon-redacted"
 RULES = (*SECRET_RULES, *IDENTIFIER_RULES, *BLOB_RULES)
 RULE_NAMES = tuple(dict.fromkeys(name for name, _ in RULES)) + ("mac",)
 
-EXCLUDED_NAMES = frozenset({"shadow", "htpasswd", "chap-secrets", "pap-secrets", "ipsec.secrets", "auth-user-pass"})
-EXCLUDED_SUFFIXES = (".pem", ".key", ".psk", ".secrets", ".auth", "_host_key")
-EXCLUDED_FRAGMENTS = ("wpa_psk", "userpass", "auth-user-pass", "htpasswd")
 
 
 def redact_text(text: str, disabled: frozenset[str] = frozenset(), salt: str = "") -> tuple[str, Counter]:
@@ -47,22 +44,9 @@ def redact_text(text: str, disabled: frozenset[str] = frozenset(), salt: str = "
     return text.replace(SENTINEL, ""), counts
 
 
-def _parts_excluded(parts: tuple[str, ...]) -> bool:
-    lowered = {p.lower() for p in parts}
-    name = parts[-1].lower()
-    return (
-        name in EXCLUDED_NAMES
-        or name.startswith("serial")
-        or "dropbear" in lowered
-        or name.endswith(EXCLUDED_SUFFIXES)
-        or any(f in name for f in EXCLUDED_FRAGMENTS)
-    )
-
-
 def _is_excluded(rel: Path) -> bool:
-    """Plain and harvest.sh-flattened ('/' -> '%') names alike; ambiguous flattened names count as excluded."""
-    cands = names.candidates(rel.parts)
-    return cands is None or any(_parts_excluded(c) for c in cands)
+    """Plain and harvest.sh-flattened ('/' -> '%') names alike; see recon/names.py for the canonical list."""
+    return names.is_excluded(rel.parts)
 
 
 def _read_text(path: Path) -> str | None:

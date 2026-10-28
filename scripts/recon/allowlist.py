@@ -60,6 +60,8 @@ def relative_name(display_name: str) -> str:
 
 def is_allowed(display_name: str, patterns: Iterable[str]) -> bool:
     rel = relative_name(display_name)
+    if rel.lower().endswith(".partial"):  # truncated frames are never sent
+        return False
     if "%" in rel:  # harvest.sh flattened name: match the real path, and refuse ambiguous ones
         rel = unflattened_path(rel)
         if rel is None:

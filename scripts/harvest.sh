@@ -74,17 +74,19 @@ valid_name() {
   return 0
 }
 
-# Mirrors recon.redact._is_excluded for real (un-flattened) frame names: such frames are never written to disk.
+# Mirrors recon/names.py is_excluded for real (un-flattened) frame names: such frames are never written to disk.
 name_excluded() {
-  local last=${1##*/} seg
-  last=${last,,}
+  local n=${1,,} last seg
+  last=${n##*/}
   case $last in
-    shadow|htpasswd|chap-secrets|pap-secrets|ipsec.secrets|auth-user-pass|serial*) return 0 ;;
-    *.pem|*.key|*.psk|*.secrets|*.auth|*_host_key|*wpa_psk*|*userpass*|*auth-user-pass*|*htpasswd*) return 0 ;;
+    shadow*|gshadow*|htpasswd|chap-secrets|pap-secrets|ipsec.secrets|auth-user-pass) return 0 ;;
+    id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|wg*.conf) return 0 ;;
+    *.pem|*.key|*.psk|*.secrets|*.auth|*_host_key|*.wg) return 0 ;;
+    *wpa_psk*|*userpass*|*auth-user-pass*|*htpasswd*|*host_key*|*ssh_host_*|*serial*) return 0 ;;
   esac
   local IFS=/
-  for seg in ${1,,}; do
-    if [[ $seg == dropbear ]]; then return 0; fi
+  for seg in $n; do
+    if [[ $seg == dropbear || $seg == private ]]; then return 0; fi
   done
   return 1
 }
@@ -269,4 +271,4 @@ main() {
   fi
 }
 
-main "$@"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
