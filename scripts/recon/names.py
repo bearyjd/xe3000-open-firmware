@@ -18,23 +18,28 @@ PARTIAL_SUFFIX = ".partial"
 
 KINDS = frozenset({"ident", "hw", "hw-bin", "hw-dt", "kernel", "sys", "config", "modem", "probe"})
 
-EXCLUDED_NAMES = frozenset({"htpasswd", "chap-secrets", "pap-secrets", "ipsec.secrets", "auth-user-pass"})
-EXCLUDED_PREFIXES = ("shadow", "gshadow", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
-EXCLUDED_SUFFIXES = (".pem", ".key", ".psk", ".secrets", ".auth", "_host_key", ".wg")
-EXCLUDED_FRAGMENTS = ("wpa_psk", "userpass", "auth-user-pass", "htpasswd", "host_key", "ssh_host_", "serial")
-EXCLUDED_DIRS = frozenset({"dropbear", "private"})
-_WG_CONF = re.compile(r"wg.*\.conf")  # wireguard private configs: wg0.conf, wgvpn.conf
+# Credential stems match as SUBSTRINGS of the lower-cased basename, so .bak/.old/~/.orig/.dpkg-old copies are caught.
+# Over-exclusion is accepted: a daemon called "shadowsocks" is excluded too.
+EXCLUDED_PREFIXES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
+EXCLUDED_SUFFIXES = (".wg",)
+EXCLUDED_FRAGMENTS = (
+    "chap-secrets", "pap-secrets", "ipsec.secrets", "shadow", "passwd-", "htpasswd", "authorized_keys",
+    "wpa_supplicant", "wpa_psk", "userpass", "auth-user-pass", "host_key", "ssh_host_", "serial",
+    ".psk", ".secrets", ".auth", ".pem", ".key",
+)
+EXCLUDED_DIRS = frozenset({"dropbear", "private"})  # any path segment; segments starting with "shadow" too
+_WG_CONF = re.compile(r"wg.*\.conf")  # wireguard private configs: wg0.conf, wgvpn.conf.bak
 
 
 def _parts_excluded(parts: tuple[str, ...]) -> bool:
-    name = parts[-1].lower()
+    lowered = [p.lower() for p in parts]
+    name = lowered[-1]
     return (
-        bool(EXCLUDED_DIRS & {p.lower() for p in parts})
-        or name in EXCLUDED_NAMES
+        any(p in EXCLUDED_DIRS or p.startswith("shadow") for p in lowered)
         or name.startswith(EXCLUDED_PREFIXES)
         or name.endswith(EXCLUDED_SUFFIXES)
         or any(f in name for f in EXCLUDED_FRAGMENTS)
-        or bool(_WG_CONF.fullmatch(name))
+        or bool(_WG_CONF.match(name))
     )
 
 

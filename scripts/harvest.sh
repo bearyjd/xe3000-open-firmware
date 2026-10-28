@@ -79,14 +79,14 @@ name_excluded() {
   local n=${1,,} last seg
   last=${n##*/}
   case $last in
-    shadow*|gshadow*|htpasswd|chap-secrets|pap-secrets|ipsec.secrets|auth-user-pass) return 0 ;;
-    id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|wg*.conf) return 0 ;;
-    *.pem|*.key|*.psk|*.secrets|*.auth|*_host_key|*.wg) return 0 ;;
-    *wpa_psk*|*userpass*|*auth-user-pass*|*htpasswd*|*host_key*|*ssh_host_*|*serial*) return 0 ;;
+    *chap-secrets*|*pap-secrets*|*ipsec.secrets*|*shadow*|*passwd-*|*htpasswd*|*authorized_keys*|*wpa_supplicant*) return 0 ;;
+    id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|wg*.conf*) return 0 ;;
+    *.psk*|*.secrets*|*.auth*|*.pem*|*.key*|*.wg) return 0 ;;
+    *wpa_psk*|*userpass*|*auth-user-pass*|*host_key*|*ssh_host_*|*serial*) return 0 ;;
   esac
   local IFS=/
   for seg in $n; do
-    if [[ $seg == dropbear || $seg == private ]]; then return 0; fi
+    if [[ $seg == dropbear || $seg == private || $seg == shadow* ]]; then return 0; fi
   done
   return 1
 }

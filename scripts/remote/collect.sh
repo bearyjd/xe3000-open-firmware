@@ -67,18 +67,20 @@ skipped() {
 }
 
 # Hard exclusions at collection (PRP section 5): never read these, whatever asks.
-# Mirrors recon/names.py and harvest.sh name_excluded (tests/test_name_parity.py fuzzes the three).
+# Mirrors recon/names.py and harvest.sh name_excluded (tests/test_name_parity.py fuzzes the three). Case-insensitive via
+# tr; without tr only the lower-case spellings match.
 is_excluded() {
-  case $1 in
+  ie_l=$1
+  if command -v tr >/dev/null 2>&1; then ie_l=$(printf '%s' "$1" | tr 'A-Z' 'a-z'); fi
+  case $ie_l in
     /etc/shadow*|/etc/gshadow*|/etc/dropbear|/etc/dropbear/*) return 0 ;;
-    */private|*/private/*) return 0 ;;
+    */private|*/private/*|*/dropbear|*/dropbear/*|*/shadow*/*) return 0 ;;
   esac
-  case ${1##*/} in
-    shadow*|gshadow*|htpasswd|chap-secrets|pap-secrets|ipsec.secrets|auth-user-pass) return 0 ;;
-    id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|wg*.conf) return 0 ;;
-    *.pem|*.key|*.psk|*.secrets|*.auth|*_host_key|*.wg) return 0 ;;
-    *wpa_psk*|*userpass*|*auth-user-pass*|*htpasswd*|*host_key*|*ssh_host_*) return 0 ;;
-    *serial*|*SERIAL*|*Serial*) return 0 ;;
+  case ${ie_l##*/} in
+    *chap-secrets*|*pap-secrets*|*ipsec.secrets*|*shadow*|*passwd-*|*htpasswd*|*authorized_keys*|*wpa_supplicant*) return 0 ;;
+    id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|wg*.conf*) return 0 ;;
+    *.psk*|*.secrets*|*.auth*|*.pem*|*.key*|*.wg) return 0 ;;
+    *wpa_psk*|*userpass*|*auth-user-pass*|*host_key*|*ssh_host_*|*serial*) return 0 ;;
   esac
   return 1
 }

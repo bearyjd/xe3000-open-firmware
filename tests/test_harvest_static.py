@@ -45,6 +45,7 @@ ALLOWED_EXTERNAL = {
     f"hexdump -v -e {HEXFMT} /dev/null": ({"detect_hex"}, True),
     'ls -l "$mp_d"': ({"modem_ports"}, True),
     'readlink "$mo_f"': ({"modem_owners"}, True),
+    "tr 'A-Z' 'a-z'": ({"is_excluded"}, False),
     "busybox --list": ({"probe_busybox"}, False),
     "grep -E '^(od|hexdump|timeout|head|readlink|ls|netstat|logread|lsmod|modinfo|dmesg)$'": ({"probe_busybox"}, False),
 }
