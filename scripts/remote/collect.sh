@@ -68,10 +68,18 @@ skipped() {
 
 # Hard exclusions at collection (PRP section 5): never read these, whatever asks.
 # Mirrors recon/names.py and harvest.sh name_excluded (tests/test_name_parity.py fuzzes the three). Case-insensitive via
-# tr; without tr only the lower-case spellings match.
+# tr, and fail-closed: an upper-case name is excluded when tr is missing or unusable.
 is_excluded() {
   ie_l=$1
-  if command -v tr >/dev/null 2>&1; then ie_l=$(printf '%s' "$1" | tr 'A-Z' 'a-z'); fi
+  case $1 in
+    *[A-Z]*)
+      # Upper-case spellings need tr to be folded. Fail CLOSED: no tr, tr failing or tr printing nothing = excluded.
+      if ! command -v tr >/dev/null 2>&1; then return 0; fi
+      ie_l=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+      ie_rc=$?
+      if [ "$ie_rc" -ne 0 ] || [ -z "$ie_l" ]; then return 0; fi
+      ;;
+  esac
   case $ie_l in
     /etc/shadow*|/etc/gshadow*|/etc/dropbear|/etc/dropbear/*) return 0 ;;
     */private|*/private/*|*/dropbear|*/dropbear/*|*/shadow*/*) return 0 ;;
@@ -80,7 +88,7 @@ is_excluded() {
     *chap-secrets*|*pap-secrets*|*ipsec.secrets*|*shadow*|*passwd-*|*htpasswd*|*authorized_keys*|*wpa_supplicant*) return 0 ;;
     id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|wg*.conf*) return 0 ;;
     *.psk*|*.secrets*|*.auth*|*.pem*|*.key*|*.wg) return 0 ;;
-    *wpa_psk*|*userpass*|*auth-user-pass*|*host_key*|*ssh_host_*|*serial*) return 0 ;;
+    *wpa_psk*|*userpass*|*auth-user-pass*|*host_key*|*ssh_host_*|*serial*|*SERIAL*|*Serial*) return 0 ;;
   esac
   return 1
 }
@@ -425,7 +433,7 @@ probe_busybox() {
 }
 
 probe_commands() {
-  for pc_c in od hexdump timeout head readlink ls netstat logread lsmod modinfo dmesg ubus date cat busybox grep pkill pgrep; do
+  for pc_c in od hexdump timeout head readlink ls netstat logread lsmod modinfo dmesg ubus date cat busybox grep pkill pgrep tr; do
     if command -v "$pc_c" >/dev/null 2>&1; then printf 'present %s\n' "$pc_c"; else printf 'absent %s\n' "$pc_c"; fi
   done
   return 0
