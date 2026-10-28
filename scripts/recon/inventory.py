@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from recon import groundtruth as gt
-from recon import names
+from recon import names, paths
 from recon.paths import PathRefused, check_path
 from recon.scrub import scrub
 
@@ -307,13 +307,26 @@ def _display_prefix(tree: Path, root: Path) -> str:
     return ""
 
 
+def _staging_unpack(root: Path) -> Path | None:
+    """build/unpack, only when neither build nor build/unpack escapes (symlinks) the real build/ directory."""
+    build = root / "build"
+    if build.is_symlink():
+        return None
+    unpack = (build / "unpack").resolve()
+    real_build = build.resolve()
+    return unpack if unpack.is_relative_to(real_build) else None
+
+
 def _checked_tree(tree: Path, root: Path) -> Path:
-    """unpacked/ and harvest/redacted (via check_path), plus the build/ staging tree that still holds binaries.
-    The inventories never leave the machine, so build/ is safe; harvest/raw and anything else stays refused."""
+    """unpacked/ and harvest/redacted (via check_path), plus build/unpack, the staging tree that still holds binaries.
+    The inventories never leave the machine, so build/unpack is safe; harvest/raw and anything else stays refused."""
     candidate = tree if tree.is_absolute() else root / tree
-    staging = root / "build"
     real = candidate.resolve()
-    if real == staging.resolve() or real.is_relative_to(staging.resolve()):
+    raw = paths._raw_root(root)
+    if real == raw or real.is_relative_to(raw):
+        raise PathRefused("refused: path is under harvest/raw")
+    staging = _staging_unpack(root)
+    if staging is not None and (real == staging or real.is_relative_to(staging)):
         return real
     return check_path(candidate, root)
 
