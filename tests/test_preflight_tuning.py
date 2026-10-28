@@ -93,6 +93,14 @@ def _blob() -> str:
     return "".join(["q8Xv2L", "mZ9aKd", "4TrYb7", "PwNc3H", "s5Jf6"])  # 29 chars, mixed case + digits
 
 
+def _phrase(sep: str) -> str:
+    return sep.join(["velvet", "quick", "harbor", "sphinx"])
+
+
+def _hex_token() -> str:
+    return "-".join(["3f9a2b7c1d4e", "8a6b5c4d3e2f", "0a1b2c3d"])
+
+
 NEGATIVE = {
     "slash-led-blob-is-not-a-path": ("etc/n1.txt", f'build_ref = "/{_blob()}"\n'),
     "digit-heavy-snake-blob": ("etc/n2.txt", f"build_ref = '{_blob().lower()[:12]}_{_blob().lower()[12:]}'\n"),
@@ -127,6 +135,21 @@ NEGATIVE = {
     "single-quoted-literal-in-assignment": ("etc/n32.txt", "API_KEY='$actualLiteral1'\n"),
     "module-passphrase-outside-parameters": ("etc/n33.txt", "Velvet_Quick_Harbor_Sphinx\n"),
     "module-passphrase-in-version-file": ("sys/module/example/parameters/version", "Velvet_Quick_Harbor_Sphinx\n"),
+    "dash-passphrase-under-neutral-key": ("etc/n34.txt", f'cloud_ref = "{_phrase("-")}"\n'),
+    "dash-passphrase-in-quoted-json": ("etc/n35.json", f'{{"note": "{_phrase("-")}"}}\n'),
+    "snake-passphrase-under-neutral-key": ("etc/n36.txt", f"cloud_ref = '{_phrase('_')}'\n"),
+    "titlecase-passphrase-name-option-outside-config": ("etc/n37.txt",
+                                                        f"config rule\n\toption name '{_phrase('-').title()}'\n"),
+    "lower-uuid-after-slash-json": ("etc/n38.json", f'{{"device_bind": "/bind/{_uuid()}"}}\n'),
+    "lower-uuid-after-short-slash-json": ("etc/n39.json", f'{{"bind_code": "/b/{_uuid()}"}}\n'),
+    "lower-hex-token-in-url-path": ("etc/n40.txt", f'url = "/api/v1/{_hex_token()}"\n'),
+    "lower-uuid-path-assignment": ("etc/n41.txt", f'bind_ref = "/usr/{_uuid()}"\n'),
+    "lower-hex-path-shell-assignment": ("etc/n42.txt", f"API_BLOB=/usr/{_hex_token()}\n"),
+    "uuid-option-outside-fstab": ("etc/config/proxy", f"config server\n\toption uuid '{_uuid()}'\n"),
+    "uuid-option-in-fstab-lookalike-name": ("etc/config/fstab.bak", f"config server\n\toption uuid '{_uuid()}'\n"),
+    "toml-literal-dollar-value": ("etc/n43.toml", 'api_key = "$actualLiteral1"\n'),
+    "ini-literal-dollar-value": ("etc/n44.ini", "[main]\napi_key=$actualLiteral1\n"),
+    "toml-literal-dollar-uci-set": ("etc/n45.toml", 'uci set example.section.key="$actualLiteral1"\n'),
     "psk-option-with-real-value": ("etc/n14.txt", f"config x\n\toption wpa_psk '{_blob()[:12]}'\n"),
 }
 
