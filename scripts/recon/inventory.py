@@ -271,9 +271,23 @@ def _read(path: Path) -> tuple[bytes | None, bool, bool]:
         return head + handle.read(), binary, False
 
 
-def load_tree(root: Path, prefix: str = "") -> Tree:
-    """Regular files only: symlinks are never followed and credential-bearing names (names.is_excluded) are skipped."""
+def _inodes_under(directory: Path) -> frozenset[tuple[int, int]]:
+    found: set[tuple[int, int]] = set()
+    for dirpath, _dirs, filenames in os.walk(directory, followlinks=False):
+        for filename in filenames:
+            try:
+                st = os.lstat(Path(dirpath) / filename)
+            except OSError:
+                continue
+            found.add((st.st_dev, st.st_ino))
+    return frozenset(found)
+
+
+def load_tree(root: Path, prefix: str = "", raw_root: Path | None = None) -> Tree:
+    """Regular files only: symlinks are never followed, credential-bearing names (names.is_excluded) are skipped and
+    any file sharing an inode with a file under raw_root (a hardlink into harvest/raw) is never read."""
     root = Path(root)
+    raw_inodes = _inodes_under(raw_root) if raw_root is not None and Path(raw_root).is_dir() else frozenset()
     texts: dict[str, str] = {}
     binaries: dict[str, bytes] = {}
     paths: list[str] = []
@@ -284,6 +298,9 @@ def load_tree(root: Path, prefix: str = "") -> Tree:
             full = Path(dirpath) / filename
             rel = full.relative_to(root)
             if full.is_symlink() or not full.is_file() or names.is_excluded(rel.parts):
+                continue
+            st = full.lstat()
+            if (st.st_dev, st.st_ino) in raw_inodes:
                 continue
             shown = f"{prefix}/{rel.as_posix()}" if prefix else rel.as_posix()
             data, binary, too_big = _read(full)
@@ -353,7 +370,7 @@ def main(argv: Sequence[str] | None = None, out: Callable[[str], None] = print) 
         if not tree_dir.is_dir():
             raise PathRefused(f"refused: {args.tree} is not a directory")
         target = _out_dir(root, args.out)
-        tree = load_tree(tree_dir, _display_prefix(tree_dir, root))
+        tree = load_tree(tree_dir, _display_prefix(tree_dir, root), paths._raw_root(root))
         counts = write_all(build(tree.texts, tree.binaries, tree.paths), target)
     except (PathRefused, OSError) as exc:
         print(scrub(f"inventory: refused: {exc}"), file=sys.stderr)

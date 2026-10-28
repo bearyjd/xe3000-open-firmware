@@ -319,6 +319,8 @@ def _check_resumable(prior: dict, cfg: RunConfig, digest: str) -> None:
         raise RunRefused("cannot resume: the input tree changed since the batch was created")
     if prior.get("model") != cfg.model:
         raise RunRefused(f"cannot resume: model differs (batch was created with {prior.get('model')!r})")
+    if prior.get("topic") != cfg.topic:
+        raise RunRefused(f"cannot resume: topic differs (batch was created with {prior.get('topic')!r})")
     if prior.get("max_tokens") != cfg.max_tokens:
         raise RunRefused(f"cannot resume: max_tokens differs (batch used {prior.get('max_tokens')!r})")
 
