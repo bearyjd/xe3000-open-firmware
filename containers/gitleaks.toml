@@ -130,10 +130,13 @@ id = "uci-set-secret"
 description = "uci set/add_list of a secret-looking option"
 regex = '''(?i)\buci[ \t]+(?:-\S+[ \t]+)*(?:set|add_list)[ \t]+\S*(?:pass|psk|key|secret|token|private|auth|sid|hash|cert|username)\S*?=['"]?([^\s'"<]\S*)'''
 secretGroup = 1
-# a double-quoted or bare shell variable reference (${name} / $name) is a template, not a value;
+# a double-quoted or bare shell variable reference (${name} / $name) is a template, not a value, but only inside
+# shell script locations (init.d, hotplug.d, bin dirs, *.sh); in TOML/INI/other formats it is a literal;
 # a single-quoted '$name' is a literal and is not exempt (judged on the whole match, which keeps the quote)
 [[rules.allowlists]]
+condition = "AND"
 regexTarget = "match"
+paths = ['''(?:^|/)(?:etc/(?:init\.d|hotplug\.d|rc\.d|uci-defaults)/.+|(?:usr/)?(?:s?bin|libexec)/.+|lib/.+|[^/]+\.sh)$''']
 regexes = ['''=(?:"\$|\$)(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)["';)]*$''']
 
 [[rules]]
@@ -148,24 +151,30 @@ description = "High-entropy quoted string of 20+ characters (catches formats no 
 regex = '''['"]([A-Za-z0-9+/_=\-]{20,})['"]'''
 entropy = 3.5
 secretGroup = 1
-# path-like value: every word of every segment is short and all lower case, so a blob with any upper-case
-# letter, or with a long word, does not qualify
+# path-like value: must start at a known filesystem root, and every word must be short, lower case and contain
+# a letter outside a-f, so hex tokens and UUIDs behind a slash do not qualify
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''^(?:/[a-z0-9]{1,12}(?:[._-][a-z0-9]{1,12})*)+/?$''']
-# snake/kebab identifier made of alphabetic words (section and rule names)
+regexes = ['''^/(?:usr|etc|tmp|lib|lib64|sys|var|bin|sbin|dev|proc|mnt|www|overlay|rom|root|luci-static)(?:/[a-z0-9]{0,6}[g-z][a-z0-9]{0,5}(?:[._-][a-z0-9]{0,6}[g-z][a-z0-9]{0,5})*){0,6}/?$''']
+# snake/kebab section or rule name, exempt only on a `config <type> '<name>'` line or as the first argument
+# of a shell script call; a bare snake/kebab value (a passphrase) is never exempt on its own
 [[rules.allowlists]]
-regexTarget = "secret"
-regexes = ['''^[a-z]{1,16}(?:[_-][a-z]{1,16}){1,5}(?:[_-]?[0-9]{1,2})?$''']
+regexTarget = "line"
+regexes = ['''^\s*config[ \t]+[a-z][a-z0-9_]{0,20}[ \t]+['"][a-z]{1,16}(?:[_-][a-z]{1,16}){1,5}(?:[_-]?[0-9]{1,2})?['"]\s*$''']
+[[rules.allowlists]]
+regexTarget = "line"
+regexes = ['''^\s*/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.sh[ \t]+'[a-z]{1,12}(?:_[a-z]{1,12}){1,2}'(?:[ \t]+(?:"\$\{[A-Za-z_][A-Za-z0-9_]*\}"|'[a-z]{1,8}'))*\s*$''']
 # long command-line option (lower-case words joined by dashes)
 [[rules.allowlists]]
 regexTarget = "secret"
 regexes = ['''^--[a-z][a-z0-9]*(?:-[a-z0-9]+)+$''']
 
-# UUIDs are exempt only in the two contexts they are benign: a filesystem uuid option (fstab, canonical or 4x8
+# UUIDs are exempt only in the two contexts they are benign: a filesystem uuid option in etc/config/fstab (canonical or 4x8
 # form) and a --uuid command-line argument. Any other quoted UUID may be an id or key and stays flagged.
 [[rules.allowlists]]
+condition = "AND"
 regexTarget = "line"
+paths = ['''(?:^|/)etc/config/fstab$''']
 regexes = ['''^\s*option[ \t]+uuid[ \t]+['"]?(?:[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{8}){3}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})['"]?\s*$''']
 [[rules.allowlists]]
 regexTarget = "line"
@@ -173,7 +182,9 @@ regexes = ['''^\s*[A-Za-z0-9_./-]+[ \t]+--uuid[ =]['"]?[0-9a-fA-F]{8}-[0-9a-fA-F
 # descriptive text options whose value is a few dictionary-like words (Title or lower case, no inner capitals);
 # ssid is deliberately absent: SSIDs are identifying and belong to the redactor
 [[rules.allowlists]]
+condition = "AND"
 regexTarget = "line"
+paths = ['''(?:^|/)etc/config/[^/]+$''']
 regexes = ['''^\s*(?:option|list)[ \t]+(?:name|text|description|label|title|icmp_type)[ \t]+['"](?:[A-Z]?[a-z]{1,12}[0-9]{0,3}|[0-9]{1,4}[a-z]{0,6})(?:[-_ .:](?:[A-Z]?[a-z]{1,12}[0-9]{0,3}|[0-9]{1,4}[a-z]{0,6})){1,5}['"]\s*$''']
 # ubus list output: camelCase method name with a type-descriptor object of camelCase argument names
 [[rules.allowlists]]
@@ -208,9 +219,11 @@ secretGroup = 1
 [[rules.allowlists]]
 regexTarget = "secret"
 regexes = ['''(?i)^["']?(\d{1,2}|true|false|yes|no|on|off|none|null|present|absent|string|integer|boolean|number|object|array|double|crc32c?|md5|sha\d+|eap|sae|strict|relaxed|rsa|ec|ecdsa|ed25519|aes\d*|chap|pap|mschap\w*|wpa[\w+-]*|(/[^\s/]+)+)["']?$''']
-# a double-quoted or bare shell variable reference (${name} / $name) is a template; single-quoted is a literal
+# a double-quoted or bare shell variable reference (${name} / $name) is a template only in shell script locations
 [[rules.allowlists]]
+condition = "AND"
 regexTarget = "secret"
+paths = ['''(?:^|/)(?:etc/(?:init\.d|hotplug\.d|rc\.d|uci-defaults)/.+|(?:usr/)?(?:s?bin|libexec)/.+|lib/.+|[^/]+\.sh)$''']
 regexes = ['''^(?:"?\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)"?[;)]*)$''']
 
 [[rules]]
@@ -355,7 +368,7 @@ secretGroup = 1
 # shell NAME=/path or NAME=number assignment
 [[rules.allowlists]]
 regexTarget = "secret"
-regexes = ['''^[A-Za-z_][A-Za-z0-9_.]*=(?:[0-9]{1,16}|(?:/[a-z0-9]{1,12}(?:[._-][a-z0-9]{1,12})*)+/?)$''']
+regexes = ['''^[A-Za-z_][A-Za-z0-9_.]*=(?:[0-9]{1,16}|/(?:usr|etc|tmp|lib|lib64|sys|var|bin|sbin|dev|proc|mnt|www|overlay|rom|root|luci-static)(?:/[a-z0-9]{0,6}[g-z][a-z0-9]{0,5}(?:[._-][a-z0-9]{0,6}[g-z][a-z0-9]{0,5})*){0,6}/?)$''']
 # kernel module version string (Title_Case / ACRONYM words ending in a version), only in a module's
 # parameters/version file
 [[rules.allowlists]]
