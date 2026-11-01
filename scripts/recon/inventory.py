@@ -28,9 +28,6 @@ EXIT_OK, EXIT_REFUSED = 0, 2
 DOCUMENTS = ("at-commands", "rpc-methods", "gpios", "kernel-modules", "initd-order")
 
 _BINARY_AT_RE = re.compile(r"AT[+^$!&#%][A-Za-z0-9_]+")
-_OBJECT_DOC_RE = re.compile(r"@object-name:\s*([\w.\-]+)")
-_METHOD_DOC_RE = re.compile(r"@method-name:\s*([\w.\-]+)")
-_LUA_TABLE_RES = (re.compile(r"^\s*M\.(\w+)\s*=\s*function"), re.compile(r"^\s*function\s+M[.:](\w+)\s*\("))
 _EXAMPLE_RE = re.compile(r'params\\*"\s*:\s*\[\s*\\*"[^"\\]*\\*"\s*,\s*\\*"([\w.\-]+)\\*"\s*,\s*\\*"(\w+)\\*"')
 _CALL_RE = re.compile(r"""call\(\s*["']([\w.\-]+)["']\s*,\s*["'](\w+)["']""")
 _JS_ARRAY_RE = re.compile(r"""["']call["']\s*,\s*["']([\w.\-]+)["']\s*,\s*["'](\w+)["']""")
@@ -120,20 +117,8 @@ def _acl_methods(name: str, text: str, errors: list[str]) -> list[dict]:
 
 
 def _lua_methods(name: str, text: str) -> list[dict]:
-    stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    obj, out = stem, []
-    for no, line in _lines(text):
-        doc_obj = _OBJECT_DOC_RE.search(line)
-        if doc_obj:
-            obj = doc_obj.group(1)
-        doc = _METHOD_DOC_RE.search(line)
-        if doc:
-            out.append(_method(obj, doc.group(1), "lua-doc", name, no))
-        for rx in _LUA_TABLE_RES:
-            table = rx.match(line)
-            if table:
-                out.append(_method(obj, table.group(1), "lua-table", name, no))
-    return out
+    return [_method(obj, method, source, name, no)
+            for obj, method, source, no in gt.lua_rpc_declarations(name, text)]
 
 
 def _call_methods(name: str, text: str) -> list[dict]:

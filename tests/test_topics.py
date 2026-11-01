@@ -4,9 +4,9 @@ import json
 import pytest
 
 from conftest import REPO, Lazy
-from fakes import FakeClient
+from fakes import FakeClient, response
 from recon import cli
-from test_analyze import always_good
+from test_analyze import always_good, good, read_jsonl
 
 prompts = Lazy("recon.prompts")
 allowlist = Lazy("recon.allowlist")
@@ -115,6 +115,55 @@ def test_without_topic_both_allowlisted_files_are_sent(root, stamp):
     sent = json.dumps([c[2] for c in client.create_calls])
     assert "RPC-MARK-LINE" in sent and "INITD-MARK-LINE" in sent
     assert json.loads((root / "findings/raw/t1/manifest.json").read_text())["topic"] is None
+
+
+@pytest.mark.parametrize("method, expected", [
+    ("fan.set_test", []),
+    ("fan.nonexistent", ["RPC method fan.nonexistent not in ground truth"]),
+])
+def test_topic_rpc_declarations_ground_only_existing_methods(root, stamp, method, expected):
+    _tree(root, stamp)
+    client = FakeClient(script=lambda i, messages: response([good(messages, f"Calls `{method}`")]))
+    assert go(root, client, "--topic", "gl-rpc-map") == 0
+    findings = read_jsonl(root / "findings/raw/t1/findings.jsonl")
+    assert len(findings) == 1
+    assert findings[0]["ungrounded"] == expected
+
+
+def test_topic_assignment_to_function_prefixed_identifier_is_not_grounded(root, stamp):
+    _tree(root, stamp)
+    handler = root / "unpacked/stock/rootfs/usr/lib/oui-httpd/rpc/fan"
+    handler.write_text("M.nonexistent = functionality\n")
+    stamp(root)
+    client = FakeClient(script=lambda i, messages: response([good(messages, "Calls `fan.nonexistent`")]))
+    assert go(root, client, "--topic", "gl-rpc-map") == 0
+    findings = read_jsonl(root / "findings/raw/t1/findings.jsonl")
+    assert len(findings) == 1
+    assert findings[0]["ungrounded"] == ["RPC method fan.nonexistent not in ground truth"]
+
+
+@pytest.mark.parametrize("excluded", ["denied", "off-topic"])
+def test_excluded_rpc_declarations_do_not_ground_claims(root, stamp, excluded):
+    _tree(root, stamp)
+    base = root / "unpacked/stock/rootfs"
+    topic_args = ("--topic", "modem-boot-flow")
+    if excluded == "denied":
+        handler = base / "usr/lib/oui-httpd/rpc/fan"
+        denied = base / "etc/dropbear/oui-httpd/rpc/fan"
+        denied.parent.mkdir(parents=True)
+        handler.rename(denied)
+        handler.with_name("cooling").write_text("M.get_status = function(p)\n  return ALLOWED-RPC-MARK\nend\n")
+        (base / "etc/init.d/gl_modem").unlink()
+        topic_args = ()
+    stamp(root)
+    client = FakeClient(script=lambda i, messages: response([good(messages, "Calls `fan.set_test`")]))
+    assert go(root, client, *topic_args) == 0
+    findings = read_jsonl(root / "findings/raw/t1/findings.jsonl")
+    assert len(findings) == 1
+    assert findings[0]["ungrounded"] == ["RPC method fan.set_test not in ground truth"]
+    if excluded == "denied":
+        sent = json.dumps([c[2] for c in client.create_calls])
+        assert "ALLOWED-RPC-MARK" in sent and "RPC-MARK-LINE" not in sent
 
 
 def test_unknown_topic_is_rejected_by_the_parser(root, stamp, capsys):

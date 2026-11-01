@@ -12,6 +12,9 @@ AT_RE = re.compile(
     r"(?<![A-Za-z0-9_])(AT[+^$!&#%][A-Za-z0-9_]+|AT(?:Z|E[01]|I\d?|V[01]|Q[01]|S\d+)(?![A-Za-z0-9_]))")
 UBUS_CALL_RE = re.compile(r"\bubus\s+(?:-\S+\s+)*call\s+([A-Za-z0-9_.\-]+)\s+([A-Za-z0-9_\-]+)")
 RPC_PARAMS_RE = re.compile(r'"params"\s*:\s*\[\s*"[^"]*"\s*,\s*"([\w.\-]+)"\s*,\s*"([\w\-]+)"')
+_OBJECT_DOC_RE = re.compile(r"@object-name:\s*([\w.\-]+)")
+_METHOD_DOC_RE = re.compile(r"@method-name:\s*([\w.\-]+)")
+_LUA_TABLE_RES = (re.compile(r"^\s*M\.(\w+)\s*=\s*function\s*\("), re.compile(r"^\s*function\s+M[.:](\w+)\s*\("))
 GPIO_WORD_RE = re.compile(r"\bgpio[\s_-]*#?(\d+)\b", re.IGNORECASE)
 GPIO_SYSFS_RE = re.compile(r"/sys/class/gpio/gpio(\d+)")
 GPIO_EXPORT_RE = re.compile(r"echo\s+(\d+)\s*>\s*/sys/class/gpio/export")
@@ -63,6 +66,30 @@ def _gpios(text: str) -> frozenset[int]:
                      for m in rx.finditer(text))
 
 
+def lua_rpc_declarations(name: str, text: str) -> list[tuple[str, str, str, int]]:
+    """Object, method, source and line for lexical declarations in a vendor RPC handler.
+
+    This is not a Lua parser: matching lines inside block comments or strings can
+    be included, and occurrences do not prove runtime reachability.
+    """
+    if "/oui-httpd/rpc/" not in "/" + name.lower():
+        return []
+    obj = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    out = []
+    for no, line in enumerate(text.splitlines(), start=1):
+        doc_obj = _OBJECT_DOC_RE.search(line)
+        if doc_obj:
+            obj = doc_obj.group(1)
+        doc = _METHOD_DOC_RE.search(line)
+        if doc:
+            out.append((obj, doc.group(1), "lua-doc", no))
+        for rx in _LUA_TABLE_RES:
+            table = rx.match(line)
+            if table:
+                out.append((obj, table.group(1), "lua-table", no))
+    return out
+
+
 def _modules(text: str, *, lsmod: bool = True) -> frozenset[str]:
     """lsmod=True is file mode (insmod/modprobe/lsmod lines); False is claim prose, where only .ko and
     backticked names count, because 'insmod with ...' in a sentence is not a module."""
@@ -77,7 +104,11 @@ def _modules(text: str, *, lsmod: bool = True) -> frozenset[str]:
 def extract(files: Mapping[str, str]) -> GroundTruth:
     """Union of every extractor over all files of the input set."""
     blob = "\n".join(files.values())
-    return GroundTruth(_at(blob), _rpc(blob), _gpios(blob), _modules(blob))
+    rpc = set(_rpc(blob))
+    for name, text in files.items():
+        for obj, method, _, _ in lua_rpc_declarations(name, text):
+            rpc.update({obj, method, f"{obj}.{method}"})
+    return GroundTruth(_at(blob), frozenset(rpc), _gpios(blob), _modules(blob))
 
 
 def mentions(claim: str) -> GroundTruth:

@@ -22,7 +22,7 @@ test: build
       -v "{{ROOT}}/scripts:/work/scripts:ro,z" -v "{{ROOT}}/tests:/work/tests:ro,z" -v "{{ROOT}}/hooks:/work/hooks:ro,z" \
       -v "{{ROOT}}/containers:/work/containers:ro,z" -v "{{ROOT}}/justfile:/work/justfile:ro,z" \
       -v "{{ROOT}}/.github:/work/.github:ro,z" -v "{{ROOT}}/.gitleaks-baseline.json:/work/.gitleaks-baseline.json:ro,z" \
-      -v "{{ROOT}}/docs:/work/docs:ro,z" -v "{{ROOT}}/README.md:/work/README.md:ro,z" \
+      -v "{{ROOT}}/recipe:/work/recipe:ro,z" -v "{{ROOT}}/docs:/work/docs:ro,z" -v "{{ROOT}}/README.md:/work/README.md:ro,z" \
       {{IMAGE}} pytest -c tests/pytest.ini -p no:cacheprovider --cov=recon --cov-report=term-missing
 
 # Host wrapper (stdlib only): gitleaks pre-flight over harvest/redacted and unpacked; writes the stamp.
@@ -51,6 +51,15 @@ dry-run RUN_ID *ARGS: build
 
 analyze RUN_ID *ARGS: build
     ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} IMAGE={{quote(IMAGE)}} HARDENING={{quote(hardening)}} \
+      bash "{{ROOT}}/scripts/analyze-container.sh" "$@"
+
+# Analyze a completed independent review root; trusted code/filtered credentials stay in this project.
+analyze-review REVIEW_ROOT RUN_ID *ARGS: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    review_root="$1"
+    shift
+    ROOT="$review_root" RECON_SOURCE_ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} IMAGE={{quote(IMAGE)}} HARDENING={{quote(hardening)}} \
       bash "{{ROOT}}/scripts/analyze-container.sh" "$@"
 
 # Phase 1: print the exact script that would run on the router. Never connects.

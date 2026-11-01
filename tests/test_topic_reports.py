@@ -1,4 +1,6 @@
 import json
+import re
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -41,7 +43,7 @@ def test_rows_link_evidence_and_mark_ungrounded(tmp_path):
                    "at-commands")
     md = topic_reports.generate(run_dir, tmp_path / "o")[0].read_text()
     rows = [l for l in md.splitlines() if l.startswith("| `")]
-    assert len(rows) == 2 and all("](<unpacked/stock/rootfs/usr/lib/oui-httpd/rpc/fan#L7>)" in r for r in rows)
+    assert len(rows) == 2 and all("](<../unpacked/stock/rootfs/usr/lib/oui-httpd/rpc/fan#L7>)" in r for r in rows)
     assert sum("UNGROUNDED" in r for r in rows) == 1 and "grounded" in rows[0]
 
 
@@ -84,3 +86,19 @@ def test_main_and_report_flag(tmp_path, capsys):
     run_dir = _run(tmp_path, [_finding("x")], "at-commands")
     assert topic_reports.main(["--run-dir", str(run_dir), "--out", str(tmp_path / "o")]) == 0
     assert "at-commands.md" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("output", ["docs/findings", "custom/reports/deep"])
+@pytest.mark.parametrize("zone", ["redacted", "unpacked"])
+@pytest.mark.parametrize("topic", ["at-commands", "gl-rpc-map", "modem-boot-flow"])
+def test_topic_evidence_links_resolve_to_evidence(tmp_path, output, zone, topic):
+    filename = "etc/fan #1%?.txt"
+    evidence = tmp_path / ("harvest/redacted" if zone == "redacted" else "unpacked") / filename
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("synthetic evidence\n")
+    run_dir = _run(tmp_path, [_finding("Synthetic claim", file=f"{zone}/{filename}")], topic)
+    path = topic_reports.generate(run_dir, tmp_path / output)[0]
+    href = urlsplit(re.search(r"\]\(<([^>]+)>\)", path.read_text()).group(1))
+    assert not href.scheme and not href.netloc and not href.path.startswith("/")
+    assert href.fragment == "L7" and not href.query
+    assert (path.parent / unquote(href.path)).resolve() == evidence.resolve()

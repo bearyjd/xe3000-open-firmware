@@ -69,7 +69,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: pre-commit hook tests
+      - uses: extractions/setup-just@e33e0265a09d6d736e2ee1e0eb685ef1de4669ff # v3.0.0
+      - name: pre-commit hook, review launch and firmware build tests
         run: |
           python3 -m pip install --user pytest==9.1.1
-          cd tests && python3 -m pytest -c pytest.ini test_hook.py -q -p no:cacheprovider
+          cd tests && python3 -m pytest -c pytest.ini test_hook.py test_review_launch.py test_firmware.py test_firmware_build.py -q -p no:cacheprovider

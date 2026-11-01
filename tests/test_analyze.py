@@ -755,3 +755,46 @@ def test_hardlinked_input_refuses_the_run(root, stamp, capsys):
     argv = ["--root", str(root), "--run-id", "r1", "--no-canary"]
     assert cli.main(argv, client_factory=lambda: client) == 2
     assert "hardlink" in capsys.readouterr().err and client.count_calls == []
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_cli_manifests_record_configured_caps_on_success_and_error(stamped, fails):
+    client = FakeClient(script=(lambda _i, _m: RuntimeError('synthetic failure')) if fails else always_good)
+    assert run_cli(stamped, client, '--max-usd', '3.75', '--max-input-tokens', '123456', '--max-tokens', '2048') == (2 if fails else 0)
+    data = json.loads((stamped / 'findings/raw/r1/manifest.json').read_text())
+    assert data['status'] == ('error' if fails else 'ok')
+    assert data['max_usd'] == 3.75 and data['max_input_tokens'] == 123456 and data['max_tokens'] == 2048
+
+
+def test_cli_batch_checkpoint_caps_and_legacy_resume_compatibility(stamped):
+    checkpoints = []
+
+    class Pause(FakeClient):
+        paused = True
+        creates = 0
+
+        def batch_create(self, *args, **kwargs):
+            self.creates += 1
+            return super().batch_create(*args, **kwargs)
+
+        def batch_status(self, batch_id):
+            checkpoints.append(json.loads((stamped / 'findings/raw/r1/manifest.json').read_text()))
+            if self.paused:
+                raise RuntimeError('synthetic polling interruption')
+            return 'ended'
+
+    client = Pause(script=always_good)
+    caps = ('--max-usd', '3.75', '--max-input-tokens', '123456', '--max-tokens', '2048')
+    assert run_cli(stamped, client, '--batch', *caps) == 2
+    checkpoint = checkpoints[0]
+    assert checkpoint['status'] == 'batch-pending'
+    assert checkpoint['max_usd'] == 3.75 and checkpoint['max_input_tokens'] == 123456
+    path = stamped / 'findings/raw/r1/manifest.json'
+    legacy = json.loads(path.read_text())
+    del legacy['max_usd'], legacy['max_input_tokens']
+    path.write_text(json.dumps(legacy))
+    client.paused = False
+    assert run_cli(stamped, client, '--resume-batch', 'b1', *caps) == 0
+    assert client.creates == 1
+    final = json.loads(path.read_text())
+    assert final['status'] == 'ok' and final['max_usd'] == 3.75 and final['max_input_tokens'] == 123456

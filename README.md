@@ -1,12 +1,14 @@
 # xe3000-open-firmware
 
-An up-to-date, reproducible OpenWrt for the **GL.iNet GL-XE3000 (Puli AX)**.
+Links into `build/`, `findings/raw/` or `/tmp/` refer to local evidence only; those files are not hosted in this repository. Local `build/openwrt` references describe the inspected checkout and any explicitly identified experiments, not a published upstream source snapshot.
 
-This is a *recipe repo*, not a fork: a pinned upstream OpenWrt 25.12.x tag, a few patches, a `files/` overlay and a small package feed. The XE3000 is the primary home router, so the device is treated as production.
+A project to build a reproducible OpenWrt for the **GL.iNet GL-XE3000 (Puli AX)**.
+
+The planned deliverable is a *recipe repo*, not a fork: a pinned upstream OpenWrt tag, a few patches, a `files/` overlay and a small package feed. The XE3000 is the primary home router, so the device is treated as production.
 
 ## Status
 
-Phase 0 — scaffold and LLM-assisted recon engine, built and tested on synthetic fixtures only. No router contact yet.
+Recon tooling is merged through PR #9. A local read-only harvest and unpacked stock 4.8.3 artifacts exist; their provenance and completeness have not been verified. Six approved paid S5/S6 runs completed with partial extraction; [curated findings](docs/findings/index.md) preserve coverage and hardware limits. Fixture-oriented engine runs do not establish completion. The original inputs still fail preflight; a separate prepared copy now passes full-tree and scoped gates and has independent verification. The user confirmed sample review and approved the exact six runs in `analysis-plan.json` in conversation; those API runs completed through the reviewed adapter with $5 per-run caps ($30 combined), not spend estimates. See [preparation evidence](docs/findings/preparation.md) and the local [review packet](build/review-20261031/REVIEW.md). See [current status](docs/prp/0003-current-status.md) for checked evidence and the remaining gates.
 
 ## License
 
@@ -28,11 +30,12 @@ Phase 0 — scaffold and LLM-assisted recon engine, built and tested on syntheti
 | Path | Purpose |
 |------|---------|
 | `docs/prp/` | Product requirement prompts (written before implementation, with devil's-advocate review) |
-| `docs/findings/` | Generated findings (from `findings/raw/`) |
-| `scripts/` | `recon/` engine plus redaction, pre-flight and analyze entry points. Harvest tooling (`scripts/remote/collect.sh`) is Phase 1, planned, not written yet |
+| `docs/findings/` | Curated partial findings, preparation evidence and preliminary upstream assessment |
+| `recipe/` | Pinned upstream source/feed manifest and three-line XE3000 target seed; [source preparation guide](recipe/README.md) |
+| `scripts/` | `recon/` engine plus redaction, pre-flight and analyze entry points. Read-only harvest tooling and offline `scripts/prepare_firmware.py` source preparation are implemented |
 | `containers/` | Podman build/analysis image, pinned gitleaks image digest, independent `gitleaks.toml`, `unpack.Containerfile` (pinned unblob + extractors) |
 | `tests/` | Offline pytest suite (FakeClient, runtime-generated fixtures) |
-| `justfile` | `build`, `test`, `build-unpack`, `unpack`, `test-unpack`, `preflight`, `redact`, `redact-unpacked`, `analyze`, `dry-run` (`PODMAN` env selects the podman command) |
+| `justfile` | `build`, `test`, `build-unpack`, `unpack`, `test-unpack`, `preflight`, `redact`, `redact-unpacked`, `analyze`, `dry-run`, `analyze-review` (`PODMAN` env selects the podman command) |
 | `hooks/` | Git hooks (`scripts/install-hooks.sh` enables them) |
 
 ## Setup
@@ -65,8 +68,19 @@ just unpack path/to/stock-image.bin stock-4.8.3     # NAME must be new; nothing 
 
 ## Roadmap
 
-1. **Phase 0** — scaffold + recon engine (this PR).
-2. **Phase 1** — live read-only harvest, redaction, secrets pre-flight.
-3. **Phase 2** — static analysis of the stock image (AT commands, GL RPC map, modem boot flow).
-4. **Phase 3** — gap analysis against upstream OpenWrt 25.12.x.
-5. Later: build recipe (pinned tag, `prepare.sh`, MHI patch, `pcie_port_pm=off`, XE3000 `gl-puli-mcu`, SIM-select script, uci-defaults); podman build container + CI; flash/rollback runbook (stock U-Boot web recovery, back up eMMC first, bootloader untouched); parental-control integration (nftables sets, rpcd ACL user for the access-control app and Vigie).
+1. **Phase 0** — scaffold and recon tooling implemented through PR #9; latest pre-gate suite passed 1,934 tests with 36 skips and 95% recon coverage; 81 host tests passed.
+2. **Phase 1** — read-only harvest tooling implemented and local artifacts exist; safe input preparation and independent checks are complete. Human sample review and approval were confirmed in conversation. Provenance/completeness validation remains pending.
+3. **Phase 2** — the six approved S5/S6 runs completed with partial extraction; curated S7 findings and an S8 summary are available with explicit limits.
+4. **Phase 3** — [preliminary static upstream assessment](docs/findings/upstream-gap.md) exists; offline pinned source preparation completed in `build/firmware-v25.12.6`, state `prepared-unconfigured`; independent source verification passed. Separate r3 compilation and image inspection completed with independent local approval ([public verification summary](docs/evidence/firmware-r3.json)); reproducibility remains unproven; see [rollback planning](docs/prp/rollback-plan.md); eventual hardware validation requires approval of exact router commands.
+5. Later: reproducible build recipe and container/CI, with patches and packages selected from reviewed evidence; validated recovery/rollback planning with bootloader untouched; parental-control integration. Existing local MHI, PCI power-management and MCU experiments are unverified inputs, not committed recipe decisions.
+
+Offline source preparation usage and verification:
+
+The offline helper requires a standalone local upstream Git repository containing the pinned commit. On a fresh checkout, follow the [optional online source bootstrap](recipe/README.md) first; it uses a new `build/upstream-source` path and preserves existing experiments.
+
+```sh
+python3 scripts/prepare_firmware.py --source build/upstream-source --out build/firmware-v25.12.6
+python3 scripts/prepare_firmware.py --source build/upstream-source --out build/firmware-v25.12.6 --verify
+```
+
+The existing prepared destination is not overwritten. See [recipe details](recipe/README.md) for the source-only boundary and later build gates. No firmware configuration expansion, compilation or router operation is performed by this helper.

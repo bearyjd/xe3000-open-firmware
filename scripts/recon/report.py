@@ -6,6 +6,7 @@ the engine-computed excerpt hash instead.
 from __future__ import annotations
 
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
 from urllib.parse import quote
@@ -34,25 +35,26 @@ def _code(text: str, limit: int = MAX_CLAIM_CHARS) -> str:
     return "`" + flat.replace("|", "\\|") + "`"
 
 
-def _evidence_link(ev: dict) -> str:
+def _evidence_link(ev: dict, evidence_prefix: str = "") -> str:
     zone, _, rest = ev["file"].partition("/")
     target = f"{EVIDENCE_BASE}/redacted/{rest}" if zone == "redacted" else ev["file"]
+    target = evidence_prefix + target
     label = _code(f"{ev['file']}:{ev['line']}", limit=200)
     return f"[{label}](<{quote(target, safe='/')}#L{int(ev['line'])}>) `{ev['excerpt_sha256'][:HASH_SHOWN]}`"
 
 
-def _row(f: dict) -> str:
+def _row(f: dict, evidence_prefix: str = "") -> str:
     status = UNGROUNDED_LABEL if f["ungrounded"] else GROUNDED_LABEL
     note = f" {_code('; '.join(f['ungrounded']))}" if f["ungrounded"] else ""
-    links = "<br>".join(_evidence_link(e) for e in f["evidence"])
+    links = "<br>".join(_evidence_link(e, evidence_prefix) for e in f["evidence"])
     return f"| {_code(f['claim'])} | {_cell(f['confidence'])} | {status}{note} | {links} |"
 
 
-def render_category(category: str, findings: list[dict], run_id: str) -> str:
+def render_category(category: str, findings: list[dict], run_id: str, *, evidence_prefix: str = "") -> str:
     head = [GENERATED_NOTE, f"# Findings: {category}", "", f"Run: `{run_id}`. Findings flagged "
             f"{UNGROUNDED_LABEL} name items absent from the deterministic ground truth.", "",
             "| Claim | Confidence | Status | Evidence |", "|---|---|---|---|"]
-    return "\n".join([*head, *(_row(f) for f in findings)]) + "\n"
+    return "\n".join([*head, *(_row(f, evidence_prefix) for f in findings)]) + "\n"
 
 
 def render_index(counts: dict[str, int], run_id: str) -> str:
@@ -68,17 +70,29 @@ def load_findings(run_dir: Path, sanitizer: canary.Sanitizer | None = None) -> l
     return [san.obj(json.loads(line)) for line in path.read_text().splitlines() if line.strip()]
 
 
+def _evidence_prefix(run_dir: Path, out_dir: Path) -> str:
+    """Runs under <root>/findings/raw/<id> identify the evidence root.
+
+    Legacy standalone run directories use the working directory as their root.
+    """
+    run_dir = run_dir.resolve()
+    standard_run = run_dir.parent.name == "raw" and run_dir.parent.parent.name == "findings"
+    root = run_dir.parent.parent.parent if standard_run else Path.cwd()
+    return Path(os.path.relpath(root, out_dir.resolve())).as_posix() + "/"
+
+
 def generate(run_dir: Path, out_dir: Path, sanitizer: canary.Sanitizer | None = None) -> list[Path]:
-    """Write one markdown file per category plus index.md; return the written paths."""
+    """Write category tables and index; runs in findings/raw/<id> locate the evidence root."""
     run_dir, out_dir = Path(run_dir), Path(out_dir)
     by_category: dict[str, list[dict]] = defaultdict(list)
     for f in load_findings(run_dir, sanitizer):
         by_category[f["category"]].append(f)
     out_dir.mkdir(parents=True, exist_ok=True)
+    evidence_prefix = _evidence_prefix(run_dir, out_dir)
     written = []
     for category, findings in sorted(by_category.items()):
         path = out_dir / f"{category}.md"
-        path.write_text(render_category(category, findings, run_dir.name))
+        path.write_text(render_category(category, findings, run_dir.name, evidence_prefix=evidence_prefix))
         written.append(path)
     index = out_dir / "index.md"
     index.write_text(render_index({c: len(v) for c, v in by_category.items()}, run_dir.name))

@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "description": "Sanitized summary of the local independent r3 actual-output audit; artifacts and underlying local records are not hosted in this repository.",
+  "provenance": {
+    "kind": "local independent review record",
+    "record": "build/firmware-environment-20261101/independent-build-r3-verification.json",
+    "record_sha256": "e3fbe99ddd20dea4d7d5a39dc16bd9955b30c7b43cb113909aedbd14806c8251"
+  },
+  "approval_status": "approved-compiled-inspected",
+  "verified_at_utc": "2026-11-01T14:17:45.375865+00:00",
+  "source_commit": "64900e756efa667774214f9c6b17c113222e01f7",
+  "source_date_epoch": 1792282260,
+  "config_sha256": "2722eda1f1e72bf40171d423335f438e530cdec3e5fafdea29643f98941f7f64",
+  "baseline_manifest_sha256": "6e57335d6bc6ee90db33a037a07d5d2348d6f75085b0bf25cb1befb83b91fc72",
+  "build_script_sha256": "bc4db433ef7c8400a5f7627cb4b5f2ce11c1908f708e817d938eac26a11f80ce",
+  "artifact_count": 18,
+  "profile_image_count": 5,
+  "package_inventory_count": 148,
+  "sha256sums_entries_verified": 17,
+  "firmware_build_complete": true,
+  "production_ready": false,
+  "reproducible": false,
+  "baseline_verification_passed": true,
+  "all_five_feed_pins_origins_detached_and_bytes_verified": true,
+  "config_feeds_version_buildinfo_verified": true,
+  "factory_matches_sysupgrade_kernel_and_zero_padded_rootfs": true,
+  "independent_from_wrapper_inspection": true,
+  "independent_host_fwtool_exit_code": 0,
+  "six_original_metadata_experiment_hashes_preserved": true,
+  "tar_members_and_epoch_verified": true,
+  "status": "compiled-inspected",
+  "environment_image_id": "sha256:96695425b78f34c79f71e4500c7565f968095abae933c40da35a0d8e0584e5ec",
+  "source": {
+    "url": "https://git.openwrt.org/openwrt/openwrt.git",
+    "tag": "v25.12.6",
+    "commit": "64900e756efa667774214f9c6b17c113222e01f7"
+  },
+  "feeds": [
+    {
+      "name": "packages",
+      "url": "https://git.openwrt.org/feed/packages.git",
+      "commit": "093d551675b1119a06ef224d419905e8d6b2af1a"
+    },
+    {
+      "name": "luci",
+      "url": "https://git.openwrt.org/project/luci.git",
+      "commit": "75a306df84a020c57a631ef5b4c02ace56d93387"
+    },
+    {
+      "name": "routing",
+      "url": "https://git.openwrt.org/feed/routing.git",
+      "commit": "48c808034414a2112cf9d5261a20a320e8d0d170"
+    },
+    {
+      "name": "telephony",
+      "url": "https://git.openwrt.org/feed/telephony.git",
+      "commit": "2618106d5846a4a542fdf5809f0d3ed228ce439b"
+    },
+    {
+      "name": "video",
+      "url": "https://github.com/openwrt/video.git",
+      "commit": "094bf58da6682f895255a35a84349a79dab4bf95"
+    }
+  ],
+  "images": [
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-initramfs-kernel.bin",
+      "type": "kernel",
+      "sha256": "5b46315cbc5ff3f338dc50e51c252afaacc7b0c2a8acedfcde4cc7b60407c79c",
+      "size": 9088568
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-sysupgrade.bin",
+      "type": "sysupgrade",
+      "sha256": "800e1ed94a86c0e7278f073a591eedbc11dc624115f7bc3f395b91008fa7bfe8",
+      "size": 9400592
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-preloader.bin",
+      "type": "preloader.bin",
+      "sha256": "91fbdd805107056bb13bc3bafffd43506eafad52e5c60e2c04bd6beafaee42a9",
+      "size": 221505
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-bl31-uboot.fip",
+      "type": "bl31-uboot.fip",
+      "sha256": "3e00bcc0cf0f91c7c6bb6bded30d0e534d40690908728f39b11dac04c74033e4",
+      "size": 540412
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-factory.bin",
+      "type": "factory",
+      "sha256": "13bbd752886ae096cd1a3d4d4b17ed7998743a0f4b61504e8b124a8f1afea7f7",
+      "size": 38433532
+    }
+  ],
+  "hardware_tested": false,
+  "limitations": [
+    "One actual build; no independent clean-build comparison.",
+    "No router contact, flashing, runtime, recovery, charging or modem acceptance.",
+    "Preloader and bootloader artifacts were compiled and hashed only; none were installed.",
+    "This summary records local audit conclusions, not independently downloadable build artifacts."
+  ],
+  "latest_test_snapshot": {
+    "host_passed": 81,
+    "offline_passed": 1934,
+    "offline_skipped": 36,
+    "recon_coverage_percent": 95,
+    "provenance": "Local epoch-fix suite logs; historical snapshot before the PR gate."
+  }
+}

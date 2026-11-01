@@ -26,6 +26,30 @@ def test_claim_mentions():
     assert "net.reload" in m.rpc_methods
 
 
+@pytest.mark.parametrize("declaration, obj, method", [
+    ("M.set_test = function(params)", "fan", "set_test"),
+    ("function M.get_status(params)", "fan", "get_status"),
+    ("function M:get_status(params)", "fan", "get_status"),
+    ("-- @object-name: cooling\n-- @method-name: set_test", "cooling", "set_test"),
+])
+def test_vendor_rpc_declarations(declaration, obj, method):
+    truth = gt.extract({"rootfs/usr/lib/oui-httpd/rpc/fan.lua": declaration})
+    assert truth.rpc_methods == {obj, method, f"{obj}.{method}"}
+    assert gt.ungrounded_reasons(f"Calls `{obj}.{method}`", truth) == []
+
+
+@pytest.mark.parametrize("name", ["rootfs/usr/lib/fan.lua", "notes/fan", "not-oui-httpd/rpc/fan"])
+def test_declarations_outside_vendor_handlers_do_not_ground_rpc(name):
+    truth = gt.extract({name: "-- @object-name: fan\n-- @method-name: set_test\nM.set_test = function(p)"})
+    assert truth.rpc_methods == frozenset()
+
+
+def test_assignment_to_function_prefixed_identifier_is_not_a_declaration():
+    truth = gt.extract({"rootfs/usr/lib/oui-httpd/rpc/fan": "M.nonexistent = functionality"})
+    assert gt.ungrounded_reasons("Calls `fan.nonexistent`", truth) == [
+        "RPC method fan.nonexistent not in ground truth"]
+
+
 def test_ungrounded_reasons():
     truth = gt.extract(FILES)
     assert gt.ungrounded_reasons("Uses AT+CFUN to power the modem", truth) == []
