@@ -1,0 +1,4 @@
+# Unified-diff context prefixes are data; check the applied source separately.
+recipe/candidates/mcu/patches/0001-select-serial-and-ubus.patch -whitespace
+recipe/candidates/mcu/patches/0002-bound-and-validate-status.patch -whitespace
+recipe/candidates/modem/gl-x3000-quectel-pci-id.patch -whitespace

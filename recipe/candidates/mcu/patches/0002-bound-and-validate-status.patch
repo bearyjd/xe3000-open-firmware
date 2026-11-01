@@ -1,0 +1,276 @@
+--- a/src/gl-puli-mcu.c
++++ b/src/gl-puli-mcu.c
+@@ -19,6 +19,8 @@
+ 
+ #include <fcntl.h>
+ #include <termios.h>
++#include <limits.h>
++#include <time.h>
+ 
+ #include <libubox/ulog.h>
+ #include <libubox/ustream.h>
+@@ -43,131 +45,126 @@
+ 
+ struct Battery
+ {
+-	float temperature;
++	double temperature;
+ 	uint16_t cycles;
+ 	uint8_t soc;
+ 	bool charging;
+ 	bool set;
+ } battery;
+ 
++/* Candidate policy: status is fresh for 10 seconds after a valid frame.
++ * This is an offline policy, not a hardware-derived limit. Polling stays 3s. */
++#define STATUS_AGE_MS 10000
++#define FRAME_MAX 512
++static uint64_t sample_time;
++
++static uint64_t
++monotonic_ms(void)
++{
++	struct timespec ts;
++	clock_gettime(CLOCK_MONOTONIC, &ts);
++	return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++}
++
++static bool
++literal(const char **cursor, const char *text)
++{
++	size_t len = strlen(text);
++	if (strncmp(*cursor, text, len))
++		return false;
++	*cursor += len;
++	return true;
++}
++
++static bool
++integer(const char **cursor, int min, int max, int *value)
++{
++	const char *from = *cursor;
++	char *end;
++	long parsed;
++
++	/* No whitespace, plus sign, decimal fractions, or silent narrowing. */
++	if (*from == '-' && min < 0)
++		from++;
++	if (*from < '0' || *from > '9')
++		return false;
++	errno = 0;
++	parsed = strtol(*cursor, &end, 10);
++	if (errno == ERANGE || parsed < min || parsed > max)
++		return false;
++	*value = parsed;
++	*cursor = end;
++	return true;
++}
++
++/* Ordered, compact wire grammar follows the examples in the pinned source.
++ * This parser intentionally does not claim to accept arbitrary JSON. */
++static bool
++process(const char *read, struct Battery *next)
++{
++	const char *p = read;
++	int soc, temperature, charging, cycles;
+ #if GL_TARGET == GL_TARGET_XE300
+-// MCU status returns something like:
+-// {OK},100,275,1,0
+-static bool
+-process(char *read)
+-{
+-	if (read[0] != '{' ||
+-		read[1] != 'O' ||
+-		read[2] != 'K' ||
+-		read[3] != '}' ||
+-		read[4] != ',')
+-		return false;
+-	const char *from = read + 5;
+-	char *to;
+-	battery.soc = strtoul(from, &to, 10);
+-	if (from == to)
+-		return false;
+-	from = to + 1;
+-	battery.temperature = strtoul(from, &to, 10) / 10.0f;
+-	if (from == to)
+-		return false;
+-	if (to[0] != ',' || (to[1] != '0' && to[1] != '1') || to[2] != ',')
+-		return false;
+-	battery.charging = to[1] == '1';
+-	from = to + 3;
+-	battery.cycles = strtoul(from, &to, 10);
+-	if (from == to)
+-		return false;
++	if (!literal(&p, "{OK},") ||
++	    !integer(&p, 0, 100, &soc) || !literal(&p, ",") ||
++	    !integer(&p, INT_MIN, INT_MAX, &temperature) || !literal(&p, ",") ||
++	    !integer(&p, 0, 1, &charging) || !literal(&p, ",") ||
++	    !integer(&p, 0, UINT16_MAX, &cycles) || *p)
++		return false;
++	next->temperature = temperature / 10.0;
++#elif GL_TARGET == GL_TARGET_XE3000
++	int code;
++	if (!literal(&p, "{\"code\":") || !integer(&p, 0, 0, &code) ||
++	    !literal(&p, ",\"capacity\":") || !integer(&p, 0, 100, &soc) ||
++	    !literal(&p, ",\"temp\":") || !integer(&p, INT_MIN, INT_MAX, &temperature) ||
++	    !literal(&p, ",\"chg_state\":") || !integer(&p, 0, 1, &charging) ||
++	    !literal(&p, ",\"charge_cycle\":") || !integer(&p, 0, UINT16_MAX, &cycles) ||
++	    !literal(&p, "}") || *p)
++		return false;
++	next->temperature = temperature;
++#endif
++	next->soc = soc;
++	next->charging = charging;
++	next->cycles = cycles;
++	next->set = true;
+ 	return true;
+ }
+-#elif GL_TARGET == GL_TARGET_XE3000
+-static bool
+-get_int_value(const char *read, const char *key, int *int_value, char **new_end)
+-{
+-	char *from = NULL;
+-
+-	from = strstr(read, key);
+-	if ((!from) || (from != read))
+-	{
+-		return false;
+-	}
+-	from = (char *)read + strlen(key);
+-	*int_value = strtol(from, new_end, 10);
+-	if (from == *new_end)
+-	{
+-		return false;
+-	}
+-
+-	return true;
+-}
+-
+-// MCU status returns something like:
+-// {"code":0,"capacity":100,"temp":28,"chg_state":1,"charge_cycle":0}
+-static bool
+-process(char *read)
+-{
+-	int int_value = 0;
+-	char *to = NULL;
+-
+-	if ((read[0] != '{') ||
+-		(!get_int_value(&read[1], "\"code\":", &int_value, &to)) ||
+-		(int_value != 0))
+-	{
+-		return false;
+-	}
+-	if (!get_int_value(to + 1, "\"capacity\":", &int_value, &to))
+-	{
+-		return false;
+-	}
+-	battery.soc = int_value;
+-	if (!get_int_value(to + 1, "\"temp\":", &int_value, &to))
+-	{
+-		return false;
+-	}
+-	battery.temperature = (float) int_value;
+-	if (!get_int_value(to + 1, "\"chg_state\":", &int_value, &to))
+-	{
+-		return false;
+-	}
+-	battery.charging = (bool) int_value;
+-	if (!get_int_value(to + 1, "\"charge_cycle\":", &int_value, &to))
+-	{
+-		return false;
+-	}
+-	battery.cycles = (uint16_t) int_value;
+-
+-	return true;
+-}
+-#endif /* GL_TARGET */
+-
+-static int
+-consume(struct ustream *s, char **a)
+-{
+-	char *eol = strstr(*a, "\n");
+-
+-	if (!eol)
+-		return -1;
+-
+-	*eol++ = '\0';
+-
+-	battery.set = process(*a);
+-	if (!battery.set)
+-		ULOG_ERR("failed to parse message from serial: %s", *a);
+-
+-	ustream_consume(s, eol - *a);
+-	*a = eol;
+-
+-	return 0;
+-}
+ 
+ static void
+ msg_cb(struct ustream *s, int bytes)
+ {
++	static char frame[FRAME_MAX + 1];
++	static size_t used;
++	static bool discard;
++	char *data;
+ 	int len;
+-	char *a = ustream_get_read_buf(s, &len);
+-
+-	while (!consume(s, &a))
+-		;
++
++	while ((data = ustream_get_read_buf(s, &len)) && len > 0) {
++		for (int i = 0; i < len; i++) {
++			unsigned char ch = data[i];
++			if (ch == '\n') {
++				struct Battery next = {0};
++				if (used && frame[used - 1] == '\r')
++					used--;
++				frame[used] = '\0';
++				if (!discard && process(frame, &next)) {
++					battery = next;
++					sample_time = monotonic_ms();
++				}
++				used = 0;
++				discard = false;
++			} else if (!discard) {
++				if (!ch || used == FRAME_MAX) {
++					discard = true;
++					used = 0;
++				} else {
++					frame[used++] = ch;
++				}
++			}
++		}
++		ustream_consume(s, len);
++		/* Reacquire after consume: the ustream buffer may have moved. */
++	}
+ }
+ 
+ static void
+@@ -197,7 +194,7 @@
+ 	cfsetospeed(&config, B9600);
+ 	tcsetattr(tty, TCSANOW, &config);
+ 
+-	stream.stream.string_data = true;
++	stream.stream.string_data = false;
+ 	stream.stream.notify_read = msg_cb;
+ 	stream.stream.notify_state = notify_cb;
+ 
+@@ -226,7 +223,7 @@
+ {
+ 	blob_buf_init(&b, 0);
+ 
+-	if (!battery.set)
++	if (!battery.set || monotonic_ms() - sample_time >= STATUS_AGE_MS)
+ 	{
+ 		blobmsg_add_u8(&b, "error", 1);
+ 	}
+@@ -248,7 +248,7 @@
+ 		blobmsg_add_u16(&b, "soc", battery.soc);
+ 		blobmsg_add_u8(&b, "charging", battery.charging);
+ 		blobmsg_add_double(&b, "temperature", battery.temperature);
+-		blobmsg_add_u16(&b, "cycles", battery.cycles);
++		blobmsg_add_u32(&b, "cycles", battery.cycles);
+ 	}
+ 	ubus_send_reply(ctx, req, b.head);
+ 

@@ -20,6 +20,24 @@ The default object source is the existing `build/openwrt` repository. `--source`
 
 `manifest.json` sits outside the checkout and records the upstream commit, tag label, feed pins, commit-derived `source_date_epoch`, and hashes of the recipe and seed. Its state is `prepared-unconfigured`, with `production_ready=false` and `firmware_build_complete=false`. Verification checks this metadata, object integrity, the exact source commit/feed file/seed, detached HEAD, and absence of unexpected generated files. It compares every tracked regular file and symlink directly against its pinned Git blob hash and expected executable mode, independently of index flags or cached file timestamps. This establishes a source baseline; it does not establish a firmware image, runtime support, or a reproducible build.
 
+## Separate offline candidates
+
+The [MCU monitor](candidates/mcu/README.md) and [Quectel MHI profile](candidates/modem/README.md)
+are reviewed proposals outside this baseline recipe. The pinned packages feed
+already includes a real XE3000 MCU monitor, although accepted r3 leaves it
+unselected. The MCU candidate has 27 passing native tests through a PTY/private
+ubus; the modem candidate has 32 passing source/config tests. These checks do not
+establish a candidate firmware build or device compatibility. The MCU's
+10-second freshness limit is a proposed policy; modem protocol and battery/PM
+behavior remain unresolved. No PCIe PM override is selected. See the
+[offline candidate record](../docs/prp/0004-offline-candidates.md) for boundaries
+and remaining verification/build gates. A separate combined candidate stage
+completed `defconfig` with exit 0 and passed independent verification. Its exact
+[combined fragment](candidates/integration.config) is retained; the candidate
+patches still need to be applied and recorded in a separate firmware build.
+None of these additions changes the five
+feed pins, target-only seed, preserved source baseline, or accepted r3 build.
+
 ## Subsequent build stages
 
 The upstream [README](https://git.openwrt.org/openwrt/openwrt.git/tree/README.md?id=64900e756efa667774214f9c6b17c113222e01f7) describes feeds update/install, configuration, and make. Before those stages, record the build host or container image digest, host package versions and dependencies, compiler environment, full source/feed pins, and `SOURCE_DATE_EPOCH` from the preparation manifest.

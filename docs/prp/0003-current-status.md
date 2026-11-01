@@ -4,6 +4,8 @@ Links into `build/`, `findings/raw/` or `/tmp/` refer to local evidence only; th
 
 Public build evidence: [sanitized r3 verification summary](../evidence/firmware-r3.json).
 
+Separate 2026-11-01 work: [offline MCU and modem candidates](0004-offline-candidates.md) passed bounded native/source checks and independent review. The pinned feed already contains a real XE3000 MCU monitor, correcting the earlier placeholder-only gap assessment; accepted r3 leaves it unselected. These candidates have not produced a firmware build or hardware result and do not change r3. The combined candidate `defconfig` and its independent verification passed. Fresh public-input acquisition/native compilation and 27 native tests passed; final local gates passed 1,971 offline tests (58 skipped, 95% recon coverage) and 152 host tests. The linked record retains the evidence and remaining build/hardware gates.
+
 Evidence snapshot: 2026-11-01; earlier recon results retain their recorded dates. This supplements the stage plan in [PRP 0002](0002-overnight-plan.md); it does not authorize new router operations or flashing.
 
 ## Checked

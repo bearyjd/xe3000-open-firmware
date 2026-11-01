@@ -73,4 +73,69 @@ jobs:
       - name: pre-commit hook, review launch and firmware build tests
         run: |
           python3 -m pip install --user pytest==9.1.1
-          cd tests && python3 -m pytest -c pytest.ini test_hook.py test_review_launch.py test_firmware.py test_firmware_build.py -q -p no:cacheprovider
+          cd tests && python3 -m pytest -c pytest.ini test_hook.py test_review_launch.py test_firmware.py test_firmware_build.py test_modem_candidate.py -q -p no:cacheprovider
+
+  mcu-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Native test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake gcc g++ make pkg-config zstd
+          python3 -m pip install --user pytest==9.1.1
+      - name: Acquire pinned public test inputs
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import urllib.request
+
+          manifest = json.loads(Path('recipe/candidates/mcu/source.json').read_text())
+          source = json.loads(Path('recipe/upstream.json').read_text())
+          root = Path('build/mcu-ci-inputs')
+          root.mkdir(parents=True, exist_ok=False)
+
+          def target(relative):
+              path = Path(relative)
+              if path.is_absolute() or '..' in path.parts:
+                  raise ValueError('Relative input path required')
+              return root / path
+
+          def obtain(url, destination, expected=None):
+              if not url.startswith('https://'):
+                  raise ValueError('HTTPS source required')
+              with urllib.request.urlopen(url, timeout=60) as response:
+                  if not response.url.startswith('https://'):
+                      raise ValueError('HTTPS redirect required')
+                  data = response.read(32 * 1024 * 1024 + 1)
+              if len(data) > 32 * 1024 * 1024:
+                  raise ValueError('Test input exceeds size bound')
+              if expected and hashlib.sha256(data).hexdigest() != expected:
+                  raise ValueError('Pinned input hash mismatch')
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_bytes(data)
+
+          package_url = ('https://raw.githubusercontent.com/openwrt/packages/'
+                         + manifest['packages_commit'] + '/' + manifest['package'] + '/')
+          for name, digest in manifest['files'].items():
+              obtain(package_url + name,
+                     target('feeds/packages/' + manifest['package'] + '/' + name), digest)
+          for archive in manifest['archives']:
+              obtain(archive['url'], target('dl/' + archive['name']), archive['sha256'])
+              recipe_url = ('https://raw.githubusercontent.com/openwrt/openwrt/'
+                            + source['upstream']['commit'] + '/' + archive['recipe'])
+              obtain(recipe_url, target(archive['recipe']), archive['recipe_sha256'])
+          PY
+      - name: Build verified native fixture
+        run: |
+          python3 scripts/mcu_offline.py --checkout build/mcu-ci-inputs \
+            --output build/mcu-offline-ci --cmake /usr/bin/cmake
+      - name: Offline real-daemon integration tests
+        env:
+          MCU_NATIVE_FIXTURE: ${{ github.workspace }}/build/mcu-offline-ci
+        run: python3 -m pytest -c tests/pytest.ini tests/test_mcu_offline.py -q -p no:cacheprovider
