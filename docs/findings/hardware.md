@@ -1,0 +1,19 @@
+# Fan, MCU, battery and Wi-Fi references
+
+Links into `build/`, `findings/raw/` or `/tmp/` refer to local evidence only; those files are not hosted in this repository. Local `build/openwrt` references describe the inspected checkout and any explicitly identified experiments, not a published upstream source snapshot.
+
+Curated static/captured evidence, 2026-10-31. The six approved paid runs completed with partial extraction. These bounded interpretations received independent semantic review; they do not establish runtime behavior or hardware acceptance. See [coverage and accounting](index.md). No proprietary source excerpts are reproduced.
+
+Captured fan configuration records enabled=1, temperature/warning=75 and divisor=1000. The unpacked image default instead records divisor=1; utility initialization includes XE3000 divisor=1000 defaults. These distinct provenances do not establish Celsius limits or demonstrated thermal control. Evidence: [etc%config%glfan:3](../../build/review-20261031/harvest/redacted/config/etc%25config%25glfan#L3), [glfan:3](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/etc/config/glfan#L3), [gl_util.sh:1754](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/lib/functions/gl_util.sh#L1754).
+
+The [fan RPC-to-service link](gl-rpc-map.md) is visible, while internal control law and fail-safe behavior remain unknown.
+
+The battery hotplug hook notifies an MCU object only for its driver-name cases; the MCU service separately declares an eco-hosted process with respawn. This does not identify physically installed chips or serial transport/framing. Locally inspected serial code has OLED gating and fallback UART settings whose XE3000 applicability remains unknown. Evidence: [10-gl-battery:3](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/etc/hotplug.d/10-gl-battery#L3), [etc%init.d%mcu:10](../../build/review-20261031/harvest/redacted/sys/etc%25init.d%25mcu#L10), [mcu:1194](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/usr/bin/mcu#L1194), [mcu:1252](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/usr/bin/mcu#L1252).
+
+The Wi-Fi profile identifies MT7981, mtwifi initialization and ra0/rax0 names; the configurator edits its band-1 profile before starting the Lua configurator. This shared source reference does not establish an active driver, country policy or calibration compatibility. Evidence: [l1profile.dat:2](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/etc/wireless/l1profile.dat#L2), [mtk-wifi-configurator:8](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/etc/init.d/mtk-wifi-configurator#L8).
+
+The net-add tuning hook selects mt76 tuning only when its helper returns 1, with helper file checks. Built-in/loaded-module checks can assign 1. File presence alone and redirected earlier file-check output do not prove that stock XE3000 uses mt76 or that the branch ran. Evidence: [etc%hotplug.d%net%00-sysctl:11](../../build/review-20261031/harvest/redacted/sys/etc%25hotplug.d%25net%2500-sysctl#L11), [etc%hotplug.d%net%00-sysctl:17](../../build/review-20261031/harvest/redacted/sys/etc%25hotplug.d%25net%2500-sysctl#L17).
+
+nginx boot invokes a helper before startup. Its default branch uses a bounded ten-iteration delay with an empty radio list and no XE3000 case; it does not observe a radio in that visible branch. A Wi-Fi readiness gate on XE3000 is not established. Evidence: [nginx:19](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/etc/init.d/nginx#L19), [gl_util.sh:2160](../../build/review-20261031/unpacked/stock-4.8.3/rootfs/lib/functions/gl_util.sh#L2160).
+
+[Independent stock observations](stock-observations.md) provide calibration and captured-storage evidence. Reported partition sizes supply no offsets, labels, GPT/overlap semantics or recovery proof. MCU protocol, charging, thermal safety and all device acceptance remain open.

@@ -254,7 +254,9 @@ def _manifest(cfg: RunConfig, status: str, est: cost.Estimate, meta: dict, ledge
     actual = round(sum(c["usd"] for c in ledger.calls), 6)
     return {
         "run_id": cfg.run_id, "topic": cfg.topic, "status": status, "created_utc": datetime.now(timezone.utc).isoformat(),
-        "model": cfg.model, "max_tokens": cfg.max_tokens, "synth_model": cfg.synth_model if synthesis else None,
+        "model": cfg.model, "max_tokens": cfg.max_tokens,
+        "max_usd": cfg.max_usd, "max_input_tokens": cfg.max_input_tokens,
+        "synth_model": cfg.synth_model if synthesis else None,
         "prompt_version": prompts.PROMPT_VERSION, "schema_version": schema.SCHEMA_VERSION,
         "batch": cfg.batch, "batch_id": meta.get("batch_id"),
         "inputs": {"tree_sha256": meta["digest"], "files": meta["files"]}, "skipped": meta["skipped"],

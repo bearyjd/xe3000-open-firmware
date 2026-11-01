@@ -76,3 +76,7 @@ def test_docs_reflect_review_fixes():
     readme = (REPO / "README.md").read_text()
     assert "redact-unpacked" in readme and "`redact`" in readme
     assert "Phase 1" in readme and "planned" in readme.lower()
+
+
+def test_offline_suite_mounts_checked_in_firmware_recipe_read_only():
+    assert '-v "{{ROOT}}/recipe:/work/recipe:ro,z"' in _recipe('test')

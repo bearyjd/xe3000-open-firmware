@@ -1,4 +1,8 @@
 import json
+import re
+from urllib.parse import unquote, urlsplit
+
+import pytest
 
 from recon import report
 
@@ -22,7 +26,7 @@ def test_generates_category_tables_with_evidence_links(tmp_path):
     names = {p.name for p in written}
     assert names == {"gpio.md", "led.md", "index.md"}
     md = (tmp_path / "docs" / "findings" / "gpio.md").read_text()
-    assert "[`redacted/etc/init.d/fan:7`](<harvest/redacted/etc/init.d/fan#L7>)" in md
+    assert "[`redacted/etc/init.d/fan:7`](<../../harvest/redacted/etc/init.d/fan#L7>)" in md
     assert "abababababab" in md and "Fan on GPIO 7 \\| pipe" in md
     assert "VERBATIM-EXCERPT-TEXT" not in md
     assert "[gpio](gpio.md)" in (tmp_path / "docs" / "findings" / "index.md").read_text()
@@ -74,3 +78,20 @@ def test_evidence_file_names_cannot_inject_links(tmp_path):
     report.generate(run_dir, tmp_path / "out")
     md = _outside_code((tmp_path / "out" / "gpio.md").read_text())
     assert "evil.example" not in md.replace("http%3A//evil.example", "")
+
+
+@pytest.mark.parametrize("output", ["docs/findings", "custom/reports/deep"])
+@pytest.mark.parametrize("zone", ["redacted", "unpacked"])
+def test_generated_evidence_links_resolve_to_evidence(tmp_path, output, zone):
+    filename = "etc/fan #1%?.txt"
+    evidence = tmp_path / ("harvest/redacted" if zone == "redacted" else "unpacked") / filename
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("synthetic evidence\n")
+    finding = _finding("Synthetic claim")
+    finding["evidence"][0]["file"] = f"{zone}/{filename}"
+    run_dir = _run(tmp_path, [finding])
+    path = next(p for p in report.generate(run_dir, tmp_path / output) if p.name == "gpio.md")
+    href = urlsplit(re.search(r"\]\(<([^>]+)>\)", path.read_text()).group(1))
+    assert not href.scheme and not href.netloc and not href.path.startswith("/")
+    assert href.fragment == "L7" and not href.query
+    assert (path.parent / unquote(href.path)).resolve() == evidence.resolve()

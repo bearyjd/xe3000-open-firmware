@@ -121,3 +121,14 @@ def test_scripts_avoid_and_or_chains():
             if pattern.search(line):
                 offenders.append(f"{path.relative_to(REPO)}:{no}")
     assert not offenders, f"A && B || C chains (SC2015): {offenders}"
+
+
+def test_host_job_runs_real_review_recipe_with_pinned_just(wf):
+    tests_setup = [step['uses'] for step in wf['jobs']['tests']['steps']
+                   if step.get('uses', '').startswith('extractions/setup-just@')]
+    host_setup = [step['uses'] for step in wf['jobs']['hook-tests']['steps']
+                  if step.get('uses', '').startswith('extractions/setup-just@')]
+    assert host_setup == tests_setup and len(host_setup) == 1
+    run = _run_text(wf['jobs']['hook-tests'])
+    assert 'test_hook.py' in run and 'test_review_launch.py' in run
+    assert '-k ' not in run and '--ignore' not in run and '|| true' not in run
