@@ -1,0 +1,31 @@
+--- a/src/gl-puli-mcu.c
++++ b/src/gl-puli-mcu.c
+@@ -270,12 +270,26 @@
+ main(int argc, char **argv)
+ {
+ 
++	char *device = MCU_PORT;
++	const char *socket = NULL;
++	int option;
++
++	while ((option = getopt(argc, argv, "d:s:")) != -1) {
++		switch (option) {
++		case 'd': device = optarg; break;
++		case 's': socket = optarg; break;
++		default: return 2;
++		}
++	}
++	if (optind != argc)
++		return 2;
++
+ 	uloop_init();
+-	conn.path = NULL;
++	conn.path = socket;
+ 	conn.cb = ubus_connect_handler;
+ 	ubus_auto_connect(&conn);
+ 
+-	if (serial_open(MCU_PORT) < 0)
++	if (serial_open(device) < 0)
+ 		return -1;
+ 
+ 	serial_query_timer.cb = serial_query_handler;

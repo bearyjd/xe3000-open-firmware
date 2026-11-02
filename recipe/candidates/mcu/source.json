@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "packages_commit": "093d551675b1119a06ef224d419905e8d6b2af1a",
+  "package": "utils/gl-puli-mcu",
+  "source_url": "https://github.com/openwrt/packages/tree/093d551675b1119a06ef224d419905e8d6b2af1a/utils/gl-puli-mcu",
+  "files": {
+    "Config.in": "1bf930c8745c92d2e02ba7791f1a52042317e3f90edacb3e39eb18d54ad39617",
+    "Makefile": "e6c6c6c18ae5a3ab12358cb56ca059ca39ac20e2a2c2987cca6d5f54ee596eb2",
+    "files/etc/init.d/gl-puli-mcu": "96f6560a03874cebf45c91b195a7619dca75ed9b75005d3cdb17dcd80fa5773b",
+    "src/CMakeLists.txt": "9c648c279852863ac457f54c9513f5632b0e021efd200da3b67424331df424ee",
+    "src/gl-puli-mcu.c": "3a27693f6176e270587f19ed46e8438fee533e0f242260bcfb1bacd8e5cc40c3"
+  },
+  "archives": [
+    {
+      "name": "json-c-0.18-nodoc.tar.gz",
+      "sha256": "602cdefc1d2aab8318fc0814b7ce7d59e72514d4276ca3eff92f35f86cf1c160",
+      "recipe": "package/libs/libjson-c/Makefile",
+      "url": "https://s3.amazonaws.com/json-c_releases/releases/json-c-0.18-nodoc.tar.gz",
+      "recipe_sha256": "8d110be85c96a25c542a9685a4fc5968ef2e4255361dabbc8f0b3e0b395828e7"
+    },
+    {
+      "name": "libubox-2026.06.19~7dd12784.tar.zst",
+      "sha256": "82f1a83069c0636722fc1c57d567a21f8b14d14904c8bf10059d2a467edd2a10",
+      "recipe": "package/libs/libubox/Makefile",
+      "url": "https://sources.openwrt.org/libubox-2026.06.19~7dd12784.tar.zst",
+      "recipe_sha256": "1ed995038c489866848c22c1246da527a2c3f604b09b001164ab53ed1f35ac67"
+    },
+    {
+      "name": "ubus-2026.06.28~24864e78.tar.zst",
+      "sha256": "33072c12e6d9a1fd59e3774f029575df61393b5a465486726609ff59314b8a84",
+      "recipe": "package/system/ubus/Makefile",
+      "url": "https://sources.openwrt.org/ubus-2026.06.28~24864e78.tar.zst",
+      "recipe_sha256": "3ad819ad571d688af3c3c3c1ba92759eb7974e317ac39848a5e99ffbdb99f3f5"
+    }
+  ]
+}

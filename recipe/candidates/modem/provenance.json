@@ -1,0 +1,29 @@
+{
+  "artifact_sha256": {
+    "README.md": "8ad3ff2438afad55fe00634018e744f24c3413cb79271159e00a3452b5214f66",
+    "candidate.config": "512a4b67e4483c5b772fc89bc50a70739ecc254646ca818e433a1766600bf923",
+    "gl-x3000-quectel-pci-id.patch": "0b52a04aa0e514888687e0e0bc115b351422ad14e32cd8a07678661a7b7fd399",
+    "tests/linux-6.12.112-public-sources.txz": "d872a18a06a9592a68f4dcfc7527c4da922e065ab7c8775a70039ce6a4756681"
+  },
+  "excluded_power_management_commit": "4087faad55849b7891008482fe0d8beae81714b8",
+  "kernel": {
+    "archive_sha256": "164dc9d1f6c93c61a15e1f071c48379b467f2b17c469cce7223471968208ed03",
+    "archive_url": "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.112.tar.xz",
+    "source_sha256": {
+      "drivers/bus/mhi/host/pci_generic.c": "76c4e4a67278c27b7e3796e4534813a78e683df687d212eb2ff05247b805a375",
+      "drivers/net/wwan/mhi_wwan_mbim.c": "126960b96fb524fb3d806533865c9d0294a3b27e474dcf4a1b5d9b6081d5ebb3"
+    },
+    "version": "6.12.112"
+  },
+  "patch": {
+    "author": "Marcello Barnaba",
+    "commit": "8cc71da72ac6dcc651c93e6a4c10351d56006fd8",
+    "date": "2026-04-28",
+    "license_caveat": "No separate patch license header; affected kernel source SPDX GPL-2.0-or-later; provenance is not an independent grant.",
+    "repository": "https://github.com/vjt/openwrt-glinet-x3000",
+    "sha256": "0b52a04aa0e514888687e0e0bc115b351422ad14e32cd8a07678661a7b7fd399",
+    "url": "https://raw.githubusercontent.com/vjt/openwrt-glinet-x3000/8cc71da72ac6dcc651c93e6a4c10351d56006fd8/target/linux/generic/pending-6.12/gl-x3000-quectel-pci-id.patch"
+  },
+  "schema_version": 1,
+  "scope": "isolated offline public source proposal; not firmware"
+}
