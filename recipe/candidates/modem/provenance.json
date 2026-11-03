@@ -1,6 +1,6 @@
 {
   "artifact_sha256": {
-    "README.md": "8ad3ff2438afad55fe00634018e744f24c3413cb79271159e00a3452b5214f66",
+    "README.md": "421c8ea7c6dffeb6cc41382b6061bc4b7ad1c891889fd0f6f72bd45e00fbc9a0",
     "candidate.config": "512a4b67e4483c5b772fc89bc50a70739ecc254646ca818e433a1766600bf923",
     "gl-x3000-quectel-pci-id.patch": "0b52a04aa0e514888687e0e0bc115b351422ad14e32cd8a07678661a7b7fd399",
     "tests/linux-6.12.112-public-sources.txz": "d872a18a06a9592a68f4dcfc7527c4da922e065ab7c8775a70039ce6a4756681"

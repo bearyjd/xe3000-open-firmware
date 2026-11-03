@@ -1,0 +1,350 @@
+{
+  "schema_version": 1,
+  "description": "Sanitized original-byte comparison of the first incremental candidate and a new independently built clean candidate. Images, logs and underlying local reports are not hosted in this repository.",
+  "provenance": {
+    "comparison": {
+      "path": "build/candidate-rebuild-20261102/clean-build-comparison.json",
+      "sha256": "d88fa3430743dfa1622774c411058ac5b41359d9329cc1227faf9a5cf7ac9a05",
+      "comparison_script_sha256": "4f737b9c982c7d445a75cabb912b4472ec62fcdaa4f59624f8cc51465488e8b5",
+      "verified_at_utc": "2026-11-02T13:20:44.192842+00:00"
+    },
+    "new_sample_independent_audit": {
+      "path": "build/candidate-rebuild-20261102/independent-final-verification.json",
+      "sha256": "bb48a831a2ace298633bd8d0d1cc044c099c3ad8636caac010484d2f798a8cbc",
+      "verified_at_utc": "2026-11-02T13:18:32.602576+00:00",
+      "passed_checks": 38
+    },
+    "public_ca_bundle_comparison": {
+      "path": "build/candidate-rebuild-20261102/public-ca-bundle-comparison.json",
+      "sha256": "c45acf6e6d50f8664809714f1214cc9a205b4fd3b43605deb84451ed089fdcc1",
+      "verified_at_utc": "2026-11-02T13:22:04.864421+00:00"
+    },
+    "sampleA_build_record": {
+      "path": "build/stages/candidate-firmware-20261101/candidate-build.json",
+      "sha256": "e998630ec87bdecde569b54cdc0ed23fc5c00117868a594e67e0e1fc9b9e4bbd"
+    },
+    "sampleB_build_record": {
+      "path": "build/stages/candidate-rebuild-20261102-r3/candidate-build.json",
+      "sha256": "dd1584311c03cd826ea7402101d1185b0520882625ed363656d7ac3d691ba84c"
+    },
+    "first_candidate_public_summary": "docs/evidence/firmware-candidate-20261101.json",
+    "accepted_r3_baseline_summary": "docs/evidence/firmware-r3.json",
+    "public_ca_parser_reproduction": {
+      "path": "build/candidate-rebuild-20261102/ca-bundle-cause.json",
+      "sha256": "7ba5508da8a6f24dde9fba2325081f81116b88bca6597a3571d3894385b18fe8",
+      "reproduction_script_sha256": "ea4eb98590085e37be38c93b75282570da87924de402cfb3815ee2adc18d994c"
+    },
+    "independent_ca_parser_reproduction_audit": {
+      "path": "build/candidate-rebuild-20261102/independent-ca-cause-verification.json",
+      "sha256": "958e3207cc99f28a0b1c4c7bde3d1c5b4006072b55057af93e8b7207c66ec4a1",
+      "passed_checks": 11
+    }
+  },
+  "result": "COMPARISON_COMPLETE_IMAGES_DIFFER",
+  "sample_roles": {
+    "sampleA": "First fresh candidate workspace with two incremental compile resumes after public source archive acquisition.",
+    "sampleB": "New independent clean candidate, with one uninterrupted offline make invocation; its workspace suffix r3 does not denote the accepted r3 baseline."
+  },
+  "matched_inputs": {
+    "source_commit": "64900e756efa667774214f9c6b17c113222e01f7",
+    "source_feed_pins_and_three_reviewed_patches_equal": true,
+    "resolved_config_sha256": "5a73a8cd37db4187888c6a2592f37e3dda5d4061d6c39f73b83dd8abb018c0ce",
+    "environment_image_id": "sha256:96695425b78f34c79f71e4500c7565f968095abae933c40da35a0d8e0584e5ec",
+    "environment_and_host_info_equal": true,
+    "container_path_equal": true,
+    "hostname": "xe3000-firmware-builder",
+    "make_jobs": 8,
+    "source_date_epoch": 1792282260,
+    "package_inventory_equal": true,
+    "package_inventory_count": 165
+  },
+  "new_sample_build": {
+    "status": "compiled-inspected-patched-candidate",
+    "clean_independent_build": true,
+    "prior_build_or_signing_outputs_copied": false,
+    "compile_invocations": 1,
+    "make_exit_code": 0,
+    "image_metadata_extraction_exit_code": 0,
+    "compilation_network": "none",
+    "artifact_count": 18,
+    "profile_image_count": 5,
+    "package_inventory_count": 165
+  },
+  "configured_snapshot_difference": {
+    "sampleA_sha256": "cceb51e1d89af941f5da6a2b99a9699cf873c76765479ecccc14d63bcbf0ac74",
+    "sampleB_sha256": "4f9cbc317d89085189eeb47895358f19a9e75898cb5a70ad2c368db751cd9293",
+    "additional_archives_present_upfront_in_sampleB": [
+      "dl/lua-5.3.5.tar.gz",
+      "dl/lua-5.4.7.tar.gz",
+      "dl/lua-cjson-2.1.0.tar.gz"
+    ],
+    "changed_generated_metadata_paths": [
+      "tmp/.packageusergroup"
+    ],
+    "removed_paths": [],
+    "usergroup_generator_scope": "Pinned scripts/package-metadata.pl:582-589 iterates unsorted Perl user/group hash keys. Generated ordering differed; line multisets and actual image passwd/group matched. This is not an observed runtime account difference."
+  },
+  "target_artifact_comparison": {
+    "compared_count": 18,
+    "byte_identical_count": 13,
+    "differing_count": 5,
+    "byte_identical_names": [
+      "config.buildinfo",
+      "feeds.buildinfo",
+      "mt7981-ram-ddr3-bl2.bin",
+      "mt7981-ram-ddr4-bl2.bin",
+      "mt7986-ram-ddr3-bl2.bin",
+      "mt7986-ram-ddr4-bl2.bin",
+      "mt7987-ram-comb-bl2.bin",
+      "mt7988-ram-comb-bl2.bin",
+      "mt7988-ram-ddr4-bl2.bin",
+      "openwrt-mediatek-filogic-glinet_gl-xe3000-bl31-uboot.fip",
+      "openwrt-mediatek-filogic-glinet_gl-xe3000-preloader.bin",
+      "openwrt-mediatek-filogic-glinet_gl-xe3000.manifest",
+      "version.buildinfo"
+    ],
+    "differing_names": [
+      "openwrt-mediatek-filogic-glinet_gl-xe3000-initramfs-kernel.bin",
+      "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-factory.bin",
+      "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-sysupgrade.bin",
+      "profiles.json",
+      "sha256sums"
+    ]
+  },
+  "profile_images_original_bytes": [
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-initramfs-kernel.bin",
+      "type": "kernel",
+      "equal": false,
+      "sampleA": {
+        "size": 11821772,
+        "sha256": "f84d875a03214b3a3bd53fd6feb15b25bf5cf16c42944054eb5f28d6e007cb2c"
+      },
+      "sampleB": {
+        "size": 11819412,
+        "sha256": "5ff0a4c3a8879715ff747e3e6255ff32d60add103636b92ca0abdb79f651d66d"
+      }
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-factory.bin",
+      "type": "factory",
+      "equal": false,
+      "sampleA": {
+        "size": 41418950,
+        "sha256": "5ae1979d5656a9adea8aaf39272af864e1392ae4abf431c3aec95437856a79cf"
+      },
+      "sampleB": {
+        "size": 41417346,
+        "sha256": "192c056f474da5d0e0abcbc4b63e981a83fbadbd7bcd7388b3cb83291bc84652"
+      }
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-sysupgrade.bin",
+      "type": "sysupgrade",
+      "equal": false,
+      "sampleA": {
+        "size": 12380432,
+        "sha256": "81d0e5de18f539bcea1fdd1a59411d915c5f314ccee7e3ed8989df24dfcd3bfc"
+      },
+      "sampleB": {
+        "size": 12380432,
+        "sha256": "e868a61fbfa2cf728c902824ce4fe4178b1192eed779f88255a834c5d0c5e8ae"
+      }
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-preloader.bin",
+      "type": "preloader.bin",
+      "equal": true,
+      "sampleA": {
+        "size": 221505,
+        "sha256": "91fbdd805107056bb13bc3bafffd43506eafad52e5c60e2c04bd6beafaee42a9"
+      },
+      "sampleB": {
+        "size": 221505,
+        "sha256": "91fbdd805107056bb13bc3bafffd43506eafad52e5c60e2c04bd6beafaee42a9"
+      }
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-bl31-uboot.fip",
+      "type": "bl31-uboot.fip",
+      "equal": true,
+      "sampleA": {
+        "size": 540412,
+        "sha256": "3e00bcc0cf0f91c7c6bb6bded30d0e534d40690908728f39b11dac04c74033e4"
+      },
+      "sampleB": {
+        "size": 540412,
+        "sha256": "3e00bcc0cf0f91c7c6bb6bded30d0e534d40690908728f39b11dac04c74033e4"
+      }
+    }
+  ],
+  "sysupgrade_components": {
+    "CONTROL": {
+      "equal": true,
+      "sampleA": {
+        "size": 23,
+        "sha256": "3d5a0e5112f88b462f80a61ea5b5e8cfedf1358f4f28c8f710853437d34c1260"
+      },
+      "sampleB": {
+        "size": 23,
+        "sha256": "3d5a0e5112f88b462f80a61ea5b5e8cfedf1358f4f28c8f710853437d34c1260"
+      }
+    },
+    "kernel": {
+      "equal": true,
+      "sampleA": {
+        "size": 4510856,
+        "sha256": "5cccf6a96ca829797cc1446772694e12765b72ef296bcd524d135526817340f5"
+      },
+      "sampleB": {
+        "size": 4510856,
+        "sha256": "5cccf6a96ca829797cc1446772694e12765b72ef296bcd524d135526817340f5"
+      }
+    },
+    "root": {
+      "equal": false,
+      "sampleA": {
+        "size": 7865344,
+        "sha256": "eca35285748d9a977be6be355a2fff72a180a02419df56514b9132984f77e65d"
+      },
+      "sampleB": {
+        "size": 7863296,
+        "sha256": "c6a793016671ac859b29a6a0f333075c713e64d0a6ec1b088696607a4a4bcbb9"
+      }
+    }
+  },
+  "named_actual_image_checks": {
+    "byte_identical_payload_names": [
+      "etc/init.d/gl-puli-mcu",
+      "lib/modules/6.12.112/mhi.ko",
+      "lib/modules/6.12.112/mhi_pci_generic.ko",
+      "lib/modules/6.12.112/mhi_wwan_ctrl.ko",
+      "lib/modules/6.12.112/mhi_wwan_mbim.ko",
+      "lib/modules/6.12.112/qmi_wwan.ko",
+      "lib/netifd/proto/modemmanager.sh",
+      "sbin/uqmi",
+      "usr/lib/libmbim-glib.so.4.9.0",
+      "usr/libexec/mbim-proxy",
+      "usr/sbin/ModemManager",
+      "usr/sbin/gl-puli-mcu"
+    ],
+    "actual_passwd_equal": true,
+    "actual_group_equal": true,
+    "differences": {
+      "etc/apk/keys/public-key.pem": {
+        "equal": false,
+        "sampleA": {
+          "size": 178,
+          "sha256": "81d28c9ddb55861c612a09f3154e3e473cae0d7ca1f04b3e9edab9a5afbc223e"
+        },
+        "sampleB": {
+          "size": 178,
+          "sha256": "e8c7c508ce368fcd75fc1d1ce29c60b1081c9faf259fcb697d1e4e8a402df732"
+        }
+      },
+      "lib/apk/db/installed": {
+        "equal": false,
+        "sampleA": {
+          "size": 135359,
+          "sha256": "6d1d12c7f4e8664de6a69351e9dae5bd670dae29ae41d71287fb07fbaad430a9"
+        },
+        "sampleB": {
+          "size": 135359,
+          "sha256": "baad2f8c3fd66bd7ce92cc4cc88a6c2b1c0a5ed0e89e67b46d67737e3b6019a3"
+        }
+      },
+      "lib/apk/db/scripts.tar.gz": {
+        "equal": false,
+        "sampleA": {
+          "size": 12802,
+          "sha256": "e2f0ff6ef319f757b7ab47cd316bfbdc890294305d9a1c601a3a157c0523e366"
+        },
+        "sampleB": {
+          "size": 12801,
+          "sha256": "72d1639f598ce41f8583cba8eb4306d5ed413f3723859ed1a0cf702595257522"
+        }
+      }
+    }
+  },
+  "rootfs_metadata_comparison": {
+    "scope": "Metadata names/modes/owners/sizes/timestamps/symlink targets only; not equality of all file contents.",
+    "sampleA_entry_count": 1498,
+    "sampleB_entry_count": 1498,
+    "added_paths": [],
+    "removed_paths": [],
+    "size_changes": [
+      {
+        "path": "etc/ssl/certs/ca-certificates.crt",
+        "sampleA_bytes": 361128,
+        "sampleB_bytes": 181603
+      },
+      {
+        "path": "lib/apk/db/scripts.tar.gz",
+        "sampleA_bytes": 12802,
+        "sampleB_bytes": 12801
+      }
+    ]
+  },
+  "public_ca_bundle": {
+    "path": "etc/ssl/certs/ca-certificates.crt",
+    "samples": {
+      "sampleA": {
+        "bundle_bytes": 361128,
+        "bundle_sha256": "80929b6097f88c3a851e31e742243ea104a81e9f8759e303dbe6f2d274b3565a",
+        "certificate_blocks": 241,
+        "duplicate_block_count": 120,
+        "unique_public_certificate_count": 121
+      },
+      "sampleB": {
+        "bundle_bytes": 181603,
+        "bundle_sha256": "5a88c31547f4676417351019576c7e8eaf8f724ff21105a9ee586ffa83866c88",
+        "certificate_blocks": 121,
+        "duplicate_block_count": 0,
+        "unique_public_certificate_count": 121
+      }
+    },
+    "same_unique_public_der_certificate_set": true,
+    "certificate_sequence_equal": false,
+    "causal_attribution": "Disposable replay of the exact public parser, certdata and blacklist reproduced the clean image bundle on run 1 and the incremental image bundle on run 2 without cleaning. Basename collision handling creates additional _2 CRT files; sorted concatenation overwrites the bundle rather than appending. Incremental resume logs show the parser rerun. Why make selected another parser invocation remains untraced; other image differences are not explained by this result.",
+    "disposable_parser_replay": [
+      {
+        "run": 1,
+        "exit_code": 0,
+        "generated_crt_file_count": 121,
+        "bundle_bytes": 181603,
+        "bundle_sha256": "5a88c31547f4676417351019576c7e8eaf8f724ff21105a9ee586ffa83866c88",
+        "certificate_blocks": 121,
+        "duplicate_blocks": 0,
+        "unique_public_certificate_count": 121
+      },
+      {
+        "run": 2,
+        "exit_code": 0,
+        "generated_crt_file_count": 241,
+        "bundle_bytes": 361128,
+        "bundle_sha256": "80929b6097f88c3a851e31e742243ea104a81e9f8759e303dbe6f2d274b3565a",
+        "certificate_blocks": 241,
+        "duplicate_blocks": 120,
+        "unique_public_certificate_count": 121
+      }
+    ]
+  },
+  "sampleA_preserved_record_and_all_18_artifacts": true,
+  "private_key_contents_read_copied_or_hashed": false,
+  "postbuild_whole_tree_snapshot_performed": false,
+  "firmware_build_complete": true,
+  "hardware_verified": false,
+  "reproducible": false,
+  "production_ready": false,
+  "limitations": [
+    "Original initramfs, factory and sysupgrade image bytes differ; no normalized or key-stripped hashes replace the original image hashes.",
+    "Fresh public signing identities differ, but keys are not established as the sole cause of all image differences. Public CA bundle and APK installed-database/scripts differences remain explicit observations.",
+    "The CA bundles contain the same 121 unique public certificates with different duplication and sequence. Exact parser replay explains duplicate bundle generation after rerun; the make dependency reason for rerun and other differing bytes remain untraced. No runtime trust equivalence or source fix is established.",
+    "Named executable/module/service and passwd/group checks do not compare every rootfs payload; matching metadata inventories do not establish content equality.",
+    "Configured snapshots differ by three source archives supplied upfront and generated user/group metadata order; matching selected source/config/environment does not mean every generated input snapshot byte is identical.",
+    "Repository indices outside the 18 target artifacts were not compared. Signature determinism and exhaustive causal attribution were not established.",
+    "No router contact, flashing, hardware, charging, modem/SIM, recovery or production acceptance; preloader/U-Boot equality does not authorize installation.",
+    "Accepted r3 remains a separate baseline. The clean sample comparison does not replace it.",
+    "Underlying reports, artifacts and logs remain local; certificates, environment dumps and private signing material are not published in this summary."
+  ]
+}

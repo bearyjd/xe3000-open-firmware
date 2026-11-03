@@ -26,15 +26,23 @@ The [MCU monitor](candidates/mcu/README.md) and [Quectel MHI profile](candidates
 are reviewed proposals outside this baseline recipe. The pinned packages feed
 already includes a real XE3000 MCU monitor, although accepted r3 leaves it
 unselected. The MCU candidate has 27 passing native tests through a PTY/private
-ubus; the modem candidate has 32 passing source/config tests. These checks do not
-establish a candidate firmware build or device compatibility. The MCU's
+ubus; the modem candidate has 32 passing source/config tests. These checks are
+separate from the [compiled candidate firmware evidence](../docs/evidence/firmware-candidate-20261101.json),
+whose independent actual-output audit passed 38 checks. Device compatibility
+remains unverified. The MCU's
 10-second freshness limit is a proposed policy; modem protocol and battery/PM
 behavior remain unresolved. No PCIe PM override is selected. See the
-[offline candidate record](../docs/prp/0004-offline-candidates.md) for boundaries
-and remaining verification/build gates. A separate combined candidate stage
+[candidate record](../docs/prp/0004-offline-candidates.md) for build provenance
+and remaining hardware/reproducibility gates. The original configuration-only stage
 completed `defconfig` with exit 0 and passed independent verification. Its exact
-[combined fragment](candidates/integration.config) is retained; the candidate
-patches still need to be applied and recorded in a separate firmware build.
+[combined fragment](candidates/integration.config) was used in the separate patched
+candidate workspace, which produced 18 public artifacts, five profile images and
+165 packages. It used a dedicated local candidate runner: the pristine-source
+`build_firmware.py` helper below intentionally rejects patched source/feed bytes.
+The first candidate is one fresh build with incremental resumes and fresh signing
+inputs. A later [clean independent comparison](../docs/evidence/firmware-candidate-comparison-20261102.json)
+matched 13 of 18 artifacts but produced different original firmware images;
+whole-image reproducibility remains unestablished.
 None of these additions changes the five
 feed pins, target-only seed, preserved source baseline, or accepted r3 build.
 

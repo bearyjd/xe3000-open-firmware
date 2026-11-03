@@ -2,11 +2,13 @@
 
 Links into `build/`, `findings/raw/` or `/tmp/` refer to local evidence only; those files are not hosted in this repository. Local `build/openwrt` references describe the inspected checkout and any explicitly identified experiments, not a published upstream source snapshot.
 
-Public build evidence: [sanitized r3 verification summary](../evidence/firmware-r3.json).
+Public build evidence: [accepted r3 baseline](../evidence/firmware-r3.json) and
+[first candidate build](../evidence/firmware-candidate-20261101.json) and
+[independent clean-build comparison](../evidence/firmware-candidate-comparison-20261102.json).
 
-Separate 2026-11-01 work: [offline MCU and modem candidates](0004-offline-candidates.md) passed bounded native/source checks and independent review. The pinned feed already contains a real XE3000 MCU monitor, correcting the earlier placeholder-only gap assessment; accepted r3 leaves it unselected. These candidates have not produced a firmware build or hardware result and do not change r3. The combined candidate `defconfig` and its independent verification passed. Fresh public-input acquisition/native compilation and 27 native tests passed; final local gates passed 1,971 offline tests (58 skipped, 95% recon coverage) and 152 host tests. The linked record retains the evidence and remaining build/hardware gates.
+Separate candidate work: the [MCU and modem record](0004-offline-candidates.md) now includes a compiled firmware result with 38 independent audit checks, 18 public artifacts, five profile images and 165 packages. It retains the accepted r3 baseline and original unpatched configuration-only stage. The first candidate resumed twice after missing public archives were acquired. A new clean candidate completed one uninterrupted offline make and passed 38 independent checks: 13 of 18 artifacts match the first candidate, but original images differ. Named payloads match; public signing identities, APK metadata and public CA bundle duplication differ. The public comparison retains both raw hashes and the bounded parser-replay finding; whole-image reproducibility remains unestablished. The pinned feed already contains a real XE3000 MCU monitor, correcting the earlier placeholder-only assessment; r3 leaves it unselected, while the candidate selects the patched XE3000 model. Prior gates passed 27 native tests, 59 independent candidate tests, 1,971 offline tests (58 skipped, 95% recon coverage) and 152 host tests; merged PR #11 separately passed five CI jobs. Hardware, reproducibility and production readiness remain unverified.
 
-Evidence snapshot: 2026-11-01; earlier recon results retain their recorded dates. This supplements the stage plan in [PRP 0002](0002-overnight-plan.md); it does not authorize new router operations or flashing.
+Candidate audit update: 2026-11-02 UTC; earlier baseline/recon/test results retain their recorded dates. This supplements the stage plan in [PRP 0002](0002-overnight-plan.md); it does not authorize new router operations or flashing.
 
 ## Checked
 

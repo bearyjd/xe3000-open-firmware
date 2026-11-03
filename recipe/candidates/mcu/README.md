@@ -5,6 +5,12 @@ This candidate applies two reviewable patches to the public package pinned in
 checkout, or establish hardware compatibility. The original package defaults
 to XE300; both models are compiled and tested here. No charging control is added.
 
+The separate [candidate firmware build](../../../docs/evidence/firmware-candidate-20261101.json)
+selects the patched XE3000 model. Its independent audit verified the actual
+compile model, UART default and named MCU image files; UART electrical behavior,
+units and charging safety remain hardware gates. The native tests below are
+separate from that firmware build.
+
 `0001` adds optional `-d SERIAL_DEVICE` and `-s UBUS_SOCKET`; the upstream device
 and socket defaults remain unchanged. `0002` validates an entire frame before
 publishing a sample, checks numeric ranges without narrowing, bounds serial

@@ -1,0 +1,298 @@
+{
+  "schema_version": 1,
+  "description": "Sanitized summary of the local candidate build and independent actual-output audit. Images, logs and underlying local reports are not hosted in this repository.",
+  "provenance": {
+    "build_record": {
+      "path": "build/stages/candidate-firmware-20261101/candidate-build.json",
+      "sha256": "e998630ec87bdecde569b54cdc0ed23fc5c00117868a594e67e0e1fc9b9e4bbd"
+    },
+    "independent_audit": {
+      "path": "build/candidate-firmware-20261101/independent-final-verification.json",
+      "sha256": "c85116863efd27c88ed8089d8e7024ad6e3f936919ffcaa656701b6c5b702425",
+      "audit_script_sha256": "c0a04b5d8dee58ac4a66c964dd83f5d7614720c9c870640ce1c8e3e85f875ed4"
+    },
+    "accepted_baseline_summary": "docs/evidence/firmware-r3.json",
+    "stage": "build/stages/candidate-firmware-20261101",
+    "local_scripts_acquisitions_and_reviews": "build/candidate-firmware-20261101"
+  },
+  "approval_status": "independently-verified-candidate-build",
+  "status": "compiled-inspected-patched-candidate",
+  "verified_at_utc": "2026-11-02T01:11:43.906373+00:00",
+  "independent_check_count": 38,
+  "source": {
+    "url": "https://git.openwrt.org/openwrt/openwrt.git",
+    "tag": "v25.12.6",
+    "commit": "64900e756efa667774214f9c6b17c113222e01f7"
+  },
+  "feeds": [
+    {
+      "name": "packages",
+      "url": "https://git.openwrt.org/feed/packages.git",
+      "commit": "093d551675b1119a06ef224d419905e8d6b2af1a"
+    },
+    {
+      "name": "luci",
+      "url": "https://git.openwrt.org/project/luci.git",
+      "commit": "75a306df84a020c57a631ef5b4c02ace56d93387"
+    },
+    {
+      "name": "routing",
+      "url": "https://git.openwrt.org/feed/routing.git",
+      "commit": "48c808034414a2112cf9d5261a20a320e8d0d170"
+    },
+    {
+      "name": "telephony",
+      "url": "https://git.openwrt.org/feed/telephony.git",
+      "commit": "2618106d5846a4a542fdf5809f0d3ed228ce439b"
+    },
+    {
+      "name": "video",
+      "url": "https://github.com/openwrt/video.git",
+      "commit": "094bf58da6682f895255a35a84349a79dab4bf95"
+    }
+  ],
+  "source_delta_scope": "Pinned upstream and feed HEADs retained. Core adds only the exact MHI patch; packages feed changes only the reviewed MCU C source. Other tracked source/feed bytes were checked independently.",
+  "patches": [
+    {
+      "order": 1,
+      "path": "recipe/candidates/mcu/patches/0001-select-serial-and-ubus.patch",
+      "sha256": "5843dc0dc947494dfed431b6db7cc75ed606711304412e7335b87d09d6a7e960",
+      "method": "git apply --check then git apply",
+      "application_root": "feeds/packages/utils/gl-puli-mcu"
+    },
+    {
+      "order": 2,
+      "path": "recipe/candidates/mcu/patches/0002-bound-and-validate-status.patch",
+      "sha256": "7828180f8bb1e2cd967a9dddff7c1261d4e2070ef1085a1f2c97c19708567952",
+      "method": "git apply --check then git apply",
+      "application_root": "feeds/packages/utils/gl-puli-mcu"
+    },
+    {
+      "order": 3,
+      "path": "recipe/candidates/modem/gl-x3000-quectel-pci-id.patch",
+      "sha256": "0b52a04aa0e514888687e0e0bc115b351422ad14e32cd8a07678661a7b7fd399",
+      "method": "exact bytes installed in OpenWrt generic pending kernel patch series",
+      "installed_path": "target/linux/generic/pending-6.12/gl-x3000-quectel-pci-id.patch"
+    }
+  ],
+  "mcu_source": {
+    "feed_path": "utils/gl-puli-mcu/src/gl-puli-mcu.c",
+    "after": "fb7b07b893790b5d4f8bdc43fec7b44e004424f8521cbb58c65ac4b110f0ba8b",
+    "before": "3a27693f6176e270587f19ed46e8438fee533e0f242260bcfb1bacd8e5cc40c3",
+    "makefile_sha256": "e6c6c6c18ae5a3ab12358cb56ca059ca39ac20e2a2c2987cca6d5f54ee596eb2",
+    "compiled_model": "GL_TARGET=2 (XE3000)",
+    "default_uart": "/dev/ttyS1"
+  },
+  "patched_kernel_pci_source_sha256": "aa6e0bbbea5a20750078c00f505294e406980b1d1e627e51299e66cd2f3a7ac7",
+  "integration_config": {
+    "path": "recipe/candidates/integration.config",
+    "sha256": "ee2c3a56dc9b43c1dba8820d238efef362e1937bd7bdcffa14cd5b1f320eecdc"
+  },
+  "config_sha256": "5a73a8cd37db4187888c6a2592f37e3dda5d4061d6c39f73b83dd8abb018c0ce",
+  "source_date_epoch": 1792282260,
+  "environment_image_id": "sha256:96695425b78f34c79f71e4500c7565f968095abae933c40da35a0d8e0584e5ec",
+  "build_hostname": "xe3000-firmware-builder",
+  "compilation_network": "none",
+  "build_method": "One fresh candidate workspace with two incremental resumes after missing public archives were acquired separately; not three independent clean builds.",
+  "compile_attempts": [
+    {
+      "command_record_name": "compile",
+      "make_exit_code": 2,
+      "missing_public_archives": [
+        "lua-5.3.5.tar.gz",
+        "lua-5.4.7.tar.gz"
+      ],
+      "retained_log": "build/stages/candidate-firmware-20261101/logs/compile.log"
+    },
+    {
+      "command_record_name": "compile-resume-1",
+      "make_exit_code": 2,
+      "missing_public_archives": [
+        "lua-cjson-2.1.0.tar.gz"
+      ],
+      "retained_log": "build/stages/candidate-firmware-20261101/logs/compile-resume-1.log"
+    },
+    {
+      "command_record_name": "compile-resume-2",
+      "make_exit_code": 0,
+      "retained_log": "build/stages/candidate-firmware-20261101/logs/compile-resume-2.log"
+    }
+  ],
+  "image_metadata_extraction_exit_code": 0,
+  "input_evidence": {
+    "preparation_manifest_sha256": "6e57335d6bc6ee90db33a037a07d5d2348d6f75085b0bf25cb1befb83b91fc72",
+    "configured_inputs_sha256": "cceb51e1d89af941f5da6a2b99a9699cf873c76765479ecccc14d63bcbf0ac74",
+    "configured_snapshot_scope": "Pre-initial-compilation inputs; the original snapshot was preserved, with later archive acquisitions recorded separately in explicit revision/resume records.",
+    "postbuild_whole_checkout_snapshot_performed": false,
+    "initial_runner_sha256": "9074b5a6363262fcea6596990927ad5713fef71dffd492d408a33de913a592e2",
+    "final_resume_runner_sha256": "cfeca00c1ae831847e3b2be1ecad4781472b62e1d26165559f74fbbaa04fd663",
+    "verified_named_public_archive_count": 123,
+    "additional_acquired_public_archive_count": 15,
+    "additional_acquired_public_archive_names": [
+      "attr-2.5.2.tar.xz",
+      "expat-2.8.4.tar.gz",
+      "dbus-1.16.2.tar.xz",
+      "libxslt-1.1.42.tar.xz",
+      "glib-2.82.0.tar.xz",
+      "libmbim-1.32.0.tar.zst",
+      "libffi-3.4.7.tar.gz",
+      "libqrtr-glib-1.2.2.tar.zst",
+      "libqmi-1.36.0.tar.zst",
+      "modemmanager-1.24.0.tar.zst",
+      "libxml2-2.15.1.tar.xz",
+      "libiconv-1.18.tar.gz",
+      "lua-5.4.7.tar.gz",
+      "lua-5.3.5.tar.gz",
+      "lua-cjson-2.1.0.tar.gz"
+    ],
+    "acquisition_manifests": [
+      {
+        "path": "build/candidate-firmware-20261101/verified-downloads-network/acquisition.json",
+        "sha256": "f9283b484da46e37e35e2da1f85f0e1ac0a091e5fa5157404007aaa91a721b78",
+        "new_archive_count": 12
+      },
+      {
+        "path": "build/candidate-firmware-20261101/verified-downloads-resume-lua/acquisition.json",
+        "sha256": "a9e71d755d4be1f0058851251bcb69959f63567a5320077919ac802dc9cf8937",
+        "new_archive_count": 2
+      },
+      {
+        "path": "build/candidate-firmware-20261101/verified-downloads-resume-cjson/acquisition.json",
+        "sha256": "7b1d24c2647397fe5a7f2d3eb856edb9cadbd9617d7b5d5601fbe96b0f65faa8",
+        "new_archive_count": 1
+      }
+    ]
+  },
+  "artifact_count": 18,
+  "profile_image_count": 5,
+  "package_inventory_count": 165,
+  "sha256sums_entries_verified": 17,
+  "packages_added_from_r3": [
+    "dbus",
+    "gl-puli-mcu",
+    "glib2",
+    "kmod-mhi-bus",
+    "kmod-mhi-pci-generic",
+    "kmod-mhi-wwan-ctrl",
+    "kmod-mhi-wwan-mbim",
+    "kmod-wwan",
+    "libattr",
+    "libdbus",
+    "libexpat",
+    "libffi",
+    "libmbim",
+    "libpcre2",
+    "libqmi",
+    "libqrtr-glib",
+    "modemmanager"
+  ],
+  "packages_removed_from_r3": [],
+  "images": [
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-initramfs-kernel.bin",
+      "type": "kernel",
+      "sha256": "f84d875a03214b3a3bd53fd6feb15b25bf5cf16c42944054eb5f28d6e007cb2c",
+      "size": 11821772
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-factory.bin",
+      "type": "factory",
+      "sha256": "5ae1979d5656a9adea8aaf39272af864e1392ae4abf431c3aec95437856a79cf",
+      "size": 41418950
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-squashfs-sysupgrade.bin",
+      "type": "sysupgrade",
+      "sha256": "81d0e5de18f539bcea1fdd1a59411d915c5f314ccee7e3ed8989df24dfcd3bfc",
+      "size": 12380432
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-preloader.bin",
+      "type": "preloader.bin",
+      "sha256": "91fbdd805107056bb13bc3bafffd43506eafad52e5c60e2c04bd6beafaee42a9",
+      "size": 221505
+    },
+    {
+      "name": "openwrt-mediatek-filogic-glinet_gl-xe3000-bl31-uboot.fip",
+      "type": "bl31-uboot.fip",
+      "sha256": "3e00bcc0cf0f91c7c6bb6bded30d0e534d40690908728f39b11dac04c74033e4",
+      "size": 540412
+    }
+  ],
+  "independent_image_checks": {
+    "embedded_metadata": {
+      "compat_version": "1.0",
+      "metadata_version": "1.1",
+      "supported_devices": [
+        "glinet,gl-xe3000"
+      ],
+      "version": {
+        "board": "glinet_gl-xe3000",
+        "dist": "OpenWrt",
+        "revision": "r33311-981c978eff",
+        "target": "mediatek/filogic",
+        "version": "25.12.6"
+      }
+    },
+    "sysupgrade_structure": {
+      "epoch": 1792282260,
+      "kernel_bytes": 4510856,
+      "root_bytes": 7865344,
+      "root_padding_bytes": 826,
+      "squashfs_bytes_used": 7864518
+    },
+    "factory_kernel_zero_padding_and_rootfs_verified": true,
+    "named_rootfs_contents_scope": "Only the named public files below were compared with staged AArch64 outputs; this is not an equality check of every rootfs file.",
+    "mhi_subsystem_match_precedes_generic": true,
+    "rm5xx_mbim_channel_config_verified": true,
+    "pcie_pm_off_absent_from_resolved_configs_and_fit": true,
+    "named_rootfs_files_verified": [
+      "etc/init.d/gl-puli-mcu",
+      "lib/modules/6.12.112/mhi.ko",
+      "lib/modules/6.12.112/mhi_pci_generic.ko",
+      "lib/modules/6.12.112/mhi_wwan_ctrl.ko",
+      "lib/modules/6.12.112/mhi_wwan_mbim.ko",
+      "lib/modules/6.12.112/qmi_wwan.ko",
+      "lib/netifd/proto/modemmanager.sh",
+      "sbin/uqmi",
+      "usr/lib/libmbim-glib.so.4.9.0",
+      "usr/libexec/mbim-proxy",
+      "usr/sbin/ModemManager",
+      "usr/sbin/gl-puli-mcu"
+    ]
+  },
+  "preservation": {
+    "prepared_baseline_full_verification_passed": true,
+    "accepted_r3_all_18_artifacts_and_source_feed_bytes_verified": true,
+    "original_config_only_stage_unpatched_without_images": true,
+    "historical_dirty_experiment_original_bytes_revalidated": false
+  },
+  "firmware_build_complete": true,
+  "hardware_verified": false,
+  "reproducible": false,
+  "production_ready": false,
+  "signing_policy": "Fresh default signing inputs in the new candidate workspace; no old private keys reused or copied. Private signing contents were not inspected or hashed by the audit.",
+  "prior_test_snapshot": {
+    "native_runtime_passed": 27,
+    "native_runtime_skipped": 0,
+    "modem_candidate_tests_passed": 32,
+    "independent_candidate_suite_passed": 59,
+    "host_passed": 152,
+    "offline_passed": 1971,
+    "offline_skipped": 58,
+    "recon_coverage_percent": 95,
+    "scope": "Earlier candidate native/source tests; merged PR #11 separately passed its five CI jobs. These tests and CI do not constitute another firmware build or hardware acceptance and were not rerun for this documentation update."
+  },
+  "limitations": [
+    "This original audit describes one fresh candidate build with incremental resumes. A subsequent independent clean-build comparison is recorded separately; full-image reproducibility remains unestablished.",
+    "Prepared baseline, accepted r3 and unpatched config-only stage remain separate; candidate results do not replace the accepted r3 baseline.",
+    "Named-file image checks do not cover every rootfs file.",
+    "Historical dirty experiment preservation records contain booleans without original digests; their original bytes were not independently revalidated by this audit.",
+    "Fresh signing inputs and different candidate configuration prevent treating r3 and candidate image hashes as a reproducibility comparison.",
+    "No router contact, flashing, runtime, recovery, charging safety or modem MBIM/QMAP acceptance.",
+    "Auxiliary preloader and bootloader artifacts were compiled and hashed only; none were installed.",
+    "The offline selected make download diagnostic omitted hidden variants; package compile dry-run failed on omitted outputs. Neither proves exhaustive download closure.",
+    "Underlying build records, audit reports, logs and binaries are local and are not hosted by this repository."
+  ],
+  "subsequent_comparison": "docs/evidence/firmware-candidate-comparison-20261102.json"
+}
