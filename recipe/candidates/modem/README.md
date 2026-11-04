@@ -1,11 +1,12 @@
 # Offline Quectel MHI profile candidate
 
-This additive fragment and exact public patch are a source proposal, not a built
-firmware image or a hardware compatibility result. Apply them only in a separate
-future candidate build. The accepted r3 build and three-line source seed remain
-unchanged. Do not replace target defaults: the XE3000 USB QMI packages remain.
-Defconfig dependency resolution, module compilation, protocol mode, port
-ownership and XE3000 battery behavior are unverified here.
+This additive fragment and exact public patch were compiled in a separate
+[candidate firmware build](../../../docs/evidence/firmware-candidate-20261101.json).
+The independent audit verified resolved configuration, the actual patched kernel
+source and named MHI modules in the image. The accepted r3 baseline and three-line
+source seed remain unchanged; the candidate retains XE3000 USB/QMI packages.
+Protocol mode, runtime matching, port ownership and XE3000 battery behavior
+remain unverified. The source checker below retains its narrower offline scope.
 
 Linux 6.12.112 already matches Qualcomm 17cb:0308 through its generic SDX65 entry.
 The patch adds subsystem 17cb:5201 before that fallback and selects the existing
