@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 
+import ca_bundle_guard
 import firmware as fw
 
 TARGET = 'CONFIG_TARGET_mediatek_filogic_DEVICE_glinet_gl-xe3000=y'
@@ -306,6 +307,7 @@ def compile_stage(root, baseline, out, recipe, environment_id, jobs):
         if record['config_sha256'] != config(out):
             raise fw.FirmwareError('configuration changed during compile')
         record.update(inspect(out, record, data, prepared['source_date_epoch']))
+        record['ca_bundle_guard'] = ca_bundle_guard.check(checkout, record['package_inventory'])
         record['status'] = 'compiled-inspected'
         record['firmware_build_complete'] = True
         save(out, record)

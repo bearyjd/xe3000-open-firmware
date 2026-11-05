@@ -81,6 +81,13 @@ def build_case(setup):
         'tool=pathlib.Path("staging_dir/host/bin/fwtool");tool.parent.mkdir(parents=True)\n'
         'tool.write_text("#!/usr/bin/python3\\nimport pathlib,sys\\npathlib.Path(sys.argv[2]).write_text("+repr(json.dumps(embedded))+")\\n")\n'
         'tool.chmod(0o755)\n'
+        f'if pathlib.Path({str(project / "ca-dup")!r}).exists():\n'
+        ' import base64\n'
+        ' pem=lambda n:b"-----BEGIN CERTIFICATE-----\\n"+base64.b64encode(bytes([n])*48)+b"\\n-----END CERTIFICATE-----\\n"\n'
+        ' ca=pathlib.Path("build_dir/target-x/ca-certificates-1"); (ca/"mozilla").mkdir(parents=True)\n'
+        ' (ca/"mozilla/a.crt").write_bytes(pem(1)); (ca/"mozilla/a_2.crt").write_bytes(pem(1))\n'
+        ' certs=ca/"ipkg-all/ca-bundle/etc/ssl/certs"; certs.mkdir(parents=True)\n'
+        ' (certs/"ca-certificates.crt").write_bytes(pem(1)+pem(1))\n'
         f'if pathlib.Path({str(project / "compile-fail")!r}).exists(): raise SystemExit(7)\n'
         f'if pathlib.Path({str(project / "missing-package")!r}).exists(): (out/"openwrt.manifest").write_text("unrelated - 1\\n")\n')
     git(source, 'add', 'feeds.conf.default', 'scripts', 'Makefile', 'fixture-epoch.mk', 'package')
@@ -290,3 +297,14 @@ def test_configure_rejects_existing_and_aliased_destinations(build_case, bad):
         out = alias / 'run'
     assert invoke((project, baseline, out, data), '--configure').returncode == 2
     assert (baseline / 'manifest.json').read_bytes() == before
+
+
+def test_duplicate_ca_bundle_fails_compile_and_marks_record_failed(build_case):
+    project = build_case[0]
+    (project / 'emit-images').write_text('')
+    (project / 'ca-dup').write_text('')
+    assert invoke(build_case, '--configure').returncode == 0
+    result = invoke(build_case, '--compile')
+    assert result.returncode != 0
+    r = record(build_case)
+    assert r['status'] == 'failed' and not r['firmware_build_complete'] and 'ca_bundle_guard' not in r

@@ -56,6 +56,12 @@ Disabling `SIGNED_PACKAGES` alone is insufficient, and silently enabling
 would be a matching first sample for that alternative. No unsigned experiment
 has been performed or selected here.
 
+## Accepted-artifact build policy (A: fresh signing key per build)
+
+1. **One uninterrupted build.** An artifact set may be accepted or compared only if it came from a single offline `make` on a fresh build directory. Resumed builds (`compile-resume-*`) are retained as evidence but labeled non-comparable. Cause: OpenWrt's `ca-certificates` parser does not clean its output, so a re-run leaves extra CRT files and a larger bundle (121 unique certificates became 241 CRT files and 241 bundle blocks, 120 duplicates). The `make` dependency that triggers the re-run is still untraced.
+2. **Automatic guard.** `scripts/ca_bundle_guard.py` runs after image inspection in `build_firmware.py --compile`. It reads each `ca-certificates-*` build directory and fails the stage (`status=failed`) if the bundle or CRT set has duplicate certificates, or the bundle and CRT sets differ. It never rewrites outputs. Result is recorded as `ca_bundle_guard` in `build-record.json`. Verified on retained stages: the clean rebuild passes (121/121/121); the resumed first candidate fails (241 blocks, 121 unique).
+3. **Signing: policy A.** Each build uses a fresh default APK signing key; private keys are never reused, copied or read. Whole-image, rootfs, public-key and package-database hashes are therefore expected to differ between builds. Comparisons use per-payload hashes (sysupgrade CONTROL/kernel, named rootfs files) and must state that scope. A fixed committed test key (byte-identical images) was considered and not selected: it weakens signing semantics. `reproducible` stays false.
+
 ## Procedure for further independent comparisons
 
 1. Select and name the matching first sample for any further experiment; preserve both candidate samples' [comparison evidence](../evidence/firmware-candidate-comparison-20261102.json), configurations, patch order, input revisions and original output hashes. The first candidate's incremental resumes belong to that one build; the clean sample is a separate build. Preserve the accepted r3 baseline separately because it has different inputs.
