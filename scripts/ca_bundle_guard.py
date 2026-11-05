@@ -46,10 +46,21 @@ def _summarize(directory: Path) -> dict:
             'crt_blocks': len(parsed), 'crt_unique': len(set(parsed))}
 
 
-def check(checkout: Path) -> list[dict]:
-    """Return one summary per ca-certificates build dir; raise on any duplicate."""
+CA_PACKAGES = frozenset({'ca-bundle', 'ca-certificates'})
+
+
+def check(checkout: Path, inventory: tuple[str, ...] | list[str] = ()) -> list[dict]:
+    """Return one summary per ca-certificates build dir; raise on any duplicate.
+
+    When the package inventory ('name - version' lines) lists a CA package, at least one
+    build directory must have been checked, so a layout change cannot disable the guard.
+    """
     roots = sorted(Path(checkout, 'build_dir').glob('target-*/ca-certificates-*'))
     summaries = [_summarize(root) for root in roots if root.is_dir()]
+    shipped = sorted({line.split(' - ', 1)[0] for line in inventory} & CA_PACKAGES)
+    if shipped and not summaries:
+        raise fw.FirmwareError('CA package in image but no ca-certificates build directory found: '
+                               + ', '.join(shipped))
     for s in summaries:
         if not s['bundle_blocks']:
             raise fw.FirmwareError('CA bundle contains no certificates')

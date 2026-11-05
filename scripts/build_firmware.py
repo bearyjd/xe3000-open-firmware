@@ -307,7 +307,7 @@ def compile_stage(root, baseline, out, recipe, environment_id, jobs):
         if record['config_sha256'] != config(out):
             raise fw.FirmwareError('configuration changed during compile')
         record.update(inspect(out, record, data, prepared['source_date_epoch']))
-        record['ca_bundle_guard'] = ca_bundle_guard.check(checkout)
+        record['ca_bundle_guard'] = ca_bundle_guard.check(checkout, record['package_inventory'])
         record['status'] = 'compiled-inspected'
         record['firmware_build_complete'] = True
         save(out, record)

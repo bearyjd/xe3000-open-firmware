@@ -95,3 +95,14 @@ def test_missing_sources_not_reported_as_duplicates(tmp_path):
     checkout = stage(tmp_path, {}, [1])
     with pytest.raises(fw.FirmwareError, match='sources missing'):
         guard.check(checkout)
+
+
+def test_ca_package_shipped_but_no_build_dir_refused(tmp_path):
+    (tmp_path / 'checkout/build_dir').mkdir(parents=True)
+    with pytest.raises(fw.FirmwareError, match='no ca-certificates build directory'):
+        guard.check(tmp_path / 'checkout', ['base-files - 1', 'ca-bundle - 20260816-r1'])
+
+
+def test_unrelated_inventory_without_build_dir_passes(tmp_path):
+    (tmp_path / 'checkout/build_dir').mkdir(parents=True)
+    assert guard.check(tmp_path / 'checkout', ['base-files - 1', 'ca-bundle-extra - 1']) == []
