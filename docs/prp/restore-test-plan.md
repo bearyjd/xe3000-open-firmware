@@ -30,7 +30,7 @@ None of these needs the router.
 - Exercising the vendor U-Boot recovery path (network recovery, button sequence): changes device state and can leave the unit unbootable.
 - Reading sectors 0-4095 / the GPT: a read, but it holds the disk GUID and partition GUIDs; needs its own approved command and redaction.
 
-A real restore test should run on a **second identical unit**, not the production router. Whether a spare exists is an open question for the owner. Without one, the honest result is "restorability unverified".
+A real restore test should run on a **second identical unit**, not the production router. **The owner confirmed on 2026-11-07 that no spare unit exists**, so no destructive restore or recovery-path test is possible. The standing result is "restorability unverified" until a spare is obtained; the no-write tests above are the most that can be demonstrated, and no flash, bootloader or recovery step on the production unit is planned.
 
 ## Stop conditions and claims
 
@@ -40,6 +40,6 @@ A real restore test should run on a **second identical unit**, not the productio
 
 ## Open decisions
 
-1. Is there a spare GL-XE3000 for a destructive restore test?
-2. May the first 4096 sectors (GPT) be read, and how should the disk and partition GUIDs be stored?
-3. Where does the off-machine second copy of the backup live?
+1. ~~Spare unit?~~ Resolved: none (2026-11-07).
+1. May the first 4096 sectors (GPT) be read, and how should the disk and partition GUIDs be stored?
+2. Where does the off-machine second copy of the backup live?
