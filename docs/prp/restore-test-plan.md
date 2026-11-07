@@ -19,6 +19,8 @@ Consequences: a blank `u-boot-env` means U-Boot runs on built-in defaults, so th
 ## What can be tested with no device write
 
 1. **Offline layout rebuild.** Create a sparse image the size of the eMMC (7,634,944 KiB), place each backup copy at its recorded start sector, read each region back and compare to the stored hashes. Pass: every region byte-identical; no overlap among p1-p6; p7/p8 overlap reproduced as recorded. This tests offsets and sizes only, not bootability.
+
+   Implemented as `scripts/layout_rebuild.py --backup <dir> --out <new image>` (run 2026-11-07 on the local backup: GPT matches the recorded map; the saved GPT head, `u-boot-env`, `factory`, `fip` and `custom` verified at their start sectors in a 7,818,182,656-byte sparse image). The `log`, `kernel` and `rootfs` partitions were never backed up, so their regions are untested. It reads only the local backup and never contacts the router; the report contains no GUIDs or hashes.
 2. **Vendor image check.** Obtain the official GL.iNet XE3000 4.8.3 firmware and the vendor U-Boot recovery guidance from vendor pages; record URL, size and SHA-256. Unpack read-only and confirm its partition layout and `fip`/`kernel`/`rootfs` expectations agree with the recorded map. Pass: names and sizes agree, or each difference is explained.
 3. **Compare `fip` to vendor.** If the vendor ships the matching bootloader, compare it to the local `fip` copy. Pass: identical, or the difference is explained.
 
