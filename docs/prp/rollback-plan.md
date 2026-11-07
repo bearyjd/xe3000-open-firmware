@@ -15,3 +15,26 @@ Before considering any device change:
 5. Prepare exact command/action lists, outage/recovery prerequisites, pass/fail criteria and stop conditions for any future hardware acceptance. Obtain explicit approval before router operations, recovery interaction, rebooting or flashing. No bootloader update is part of this plan.
 
 Local build/recipe work can proceed without device changes. [Curated findings](../findings/index.md) and [upstream gates](../findings/upstream-gap.md) leave modem/SIM, MCU/charging/thermal, calibration/storage and recovery acceptance open. Firmware build success will not close these gates.
+
+## Read-only storage identification (2026-11-07)
+
+Two approved read-only command lists were run against the production unit (stock 4.8.3, OpenWrt 21.02-based, kernel 5.4.211, `mediatek/mt7981`). Only `cat`, `ls`, `block info`, `mount`, `df` and `uname` were used; nothing was written, flashed, rebooted or probed on the modem/MCU, and no raw flash device was read. `fdisk` is not installed on the router. Raw captures stay local and gitignored; redacted partition facts are summarised here. This closes the layout part of step 2 above but **does not** identify the installed U-Boot version or authorize any backup.
+
+Single eMMC (`mmcblk0`, about 7.28 GiB) with `mmcblk0boot0`/`mmcblk0boot1` (4 MiB each, sector counts from sysfs) and `mmcblk0rpmb`. Start offsets are 512-byte sectors:
+
+| # | Name | Start | Size | Notes |
+|---|------|------:|-----:|-------|
+| p1 | `log` | 4096 | 2 MiB | attached as `block2mtd` log device (only mtd device) |
+| p2 | `u-boot-env` | 8192 | 512 KiB | U-Boot environment |
+| p3 | `factory` | 9216 | 2 MiB | factory data (calibration/identity expected; contents not read) |
+| p4 | `fip` | 13312 | 2 MiB | bootloader image by name; contents not read |
+| p5 | `custom` | 17408 | 2 MiB | purpose unidentified |
+| p6 | `kernel` | 21504 | 32 MiB | |
+| p7 | `rootfs` | 87040 | about 7.24 GiB | read-only squashfs at `/rom` (58.5 MB used) |
+| p8 | `rootfs_data` | 206592 | about 7.18 GiB | f2fs at `/overlay`; starts inside p7 |
+
+- **p8 overlaps p7.** `rootfs_data` begins 119,552 sectors into `rootfs`, just after the squashfs image, so it is created at runtime from the tail of `rootfs`. The partitions are not disjoint; any restore plan must treat them together.
+- Sectors 0-4095 are unmapped; what lives there and in the boot partitions is unknown.
+- The kernel command line selects root by `root=PARTLABEL=rootfs`, but `/dev/disk/by-partlabel` is absent; names above come from sysfs `PARTNAME`.
+- Still open: installed U-Boot/FIP version and advisory applicability, contents of p2-p5 and the boot partitions, backup scope and storage, restore-test method. A bootloader or `u-boot-env` backup (about 6.5 MiB for p2-p5, plus 8 MiB boot partitions) is plausible in size but needs separately approved exact commands; `fw_printenv` can expose identifiers and also needs its own approval and redaction.
+
