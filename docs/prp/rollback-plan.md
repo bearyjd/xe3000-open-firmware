@@ -4,7 +4,7 @@
 
 GL.iNet's [official debrick documentation](https://docs.gl-inet.com/router/en/4/faq/debrick/) includes XE3000 recovery guidance. This identifies a vendor recovery route, not a tested recovery path for this unit.
 
-The [March 26, 2025 vendor advisory](https://docs.gl-inet.com/router/en/4/faq/problem_notification_for_mt2500_x3000_xe3000/) covers XE3000 startup and U-Boot recovery defects and recommends bootloader and firmware updates. Installed U-Boot status is unknown. A separately approved read-only identification step must establish applicability before recovery is assumed. This project does not authorize either upgrade; the bootloader remains untouched.
+The [March 26, 2025 vendor advisory](https://docs.gl-inet.com/router/en/4/faq/problem_notification_for_mt2500_x3000_xe3000/) covers XE3000 startup and U-Boot recovery defects and recommends bootloader and firmware updates. Installed U-Boot was identified on 2026-11-07 (see below): its build string matches the advisory's recommended XE3000 build, so the advisory's bootloader update does not appear to apply; recovery is still untested. This project does not authorize either upgrade; the bootloader remains untouched.
 
 Before considering any device change:
 
@@ -37,4 +37,11 @@ Single eMMC (`mmcblk0`, about 7.28 GiB) with `mmcblk0boot0`/`mmcblk0boot1` (4 Mi
 - Sectors 0-4095 are unmapped; what lives there and in the boot partitions is unknown.
 - The kernel command line selects root by `root=PARTLABEL=rootfs`, but `/dev/disk/by-partlabel` is absent; names above come from sysfs `PARTNAME`.
 - Still open: installed U-Boot/FIP version and advisory applicability, contents of p2-p5 and the boot partitions, backup scope and storage, restore-test method. A bootloader or `u-boot-env` backup (about 6.5 MiB for p2-p5, plus 8 MiB boot partitions) is plausible in size but needs separately approved exact commands; `fw_printenv` can expose identifiers and also needs its own approval and redaction.
+
+## Installed U-Boot and local backup (2026-11-07)
+
+- **Version.** Three further approved read-only router commands found no `/etc/fw_env.config` (so `fw_printenv` cannot run) and no `u-boot`/`bl31`/`fip` lines in `dmesg`. The version came from a locally searched read of the `fip` partition: `U-Boot 2022.07-rc3 (Feb 25 2025 - 19:07:14 +0800)`.
+- **Advisory comparison.** The [vendor advisory](https://docs.gl-inet.com/router/en/4/faq/problem_notification_for_mt2500_x3000_xe3000/) recommends U-Boot "version 2025-02-25 19:05:24" for GL-X3000 and "2025-02-25 19:07:14" for GL-XE3000, with firmware 4.7.4. The installed build timestamp equals the XE3000 value, and installed firmware 4.8.3 is newer than 4.7.4. The advisory lists no affected versions and no way to check the installed one, so this is a timestamp match, not proof of the fix. No bootloader update is indicated or authorized.
+- **Local read-only backup.** Raw reads (`dd bs=64k`, one SSH call each) of `u-boot-env` (p2), `factory` (p3), `fip` (p4), `custom` (p5), `mmcblk0boot0` and `mmcblk0boot1` were stored in a mode-0700 gitignored local folder and verified byte-identical to prior on-device `sha256sum` values (524,288 / 2,097,152 x3 / 4,194,304 x2 bytes). The `factory` copy was not opened. Contents and hashes are not reproduced here because `factory` carries device identity and calibration.
+- **Limits.** This is a single local copy with no off-machine or encrypted second copy. A matching hash proves the transfer, not restorability: no restore layout or isolated restore test exists, and p7/p8 overlap (see above). Contents of `custom`, the boot partitions and the unmapped first 2 MiB remain unidentified. Step 2 of the checklist is complete for layout; steps 3-5 remain open.
 
