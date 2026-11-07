@@ -38,8 +38,10 @@ A real restore test should run on a **second identical unit**, not the productio
 - Claim only what a test demonstrated. Layout rebuild passing means offsets are consistent; it does not mean a restore boots. `production_ready` and `reproducible` stay false.
 - Keep all raw copies local, gitignored and unshared; record hashes only for non-identity partitions, never `factory`.
 
-## Open decisions
+## Decisions and remaining gaps (2026-11-07)
 
-1. ~~Spare unit?~~ Resolved: none (2026-11-07).
-1. May the first 4096 sectors (GPT) be read, and how should the disk and partition GUIDs be stored?
-2. Where does the off-machine second copy of the backup live?
+1. ~~Spare unit?~~ None exists.
+2. ~~Read the first 4096 sectors?~~ Done under approved commands (`dd if=/dev/mmcblk0 bs=512 count=4096`, verified against an on-router hash of the same range). Sector 0 holds a protective MBR (0x55AA) and sector 1 a GPT header (`EFI PART`); the rest of the 2 MiB is blank. The disk and partition GUIDs are in the local copy only and are deliberately not recorded in this repository. The partition entries have not yet been parsed against the sysfs map.
+3. ~~Where does the second copy live?~~ A mode-0700 folder `~/xe3000-backup-20261107` on the same workstation, with a `SHA256SUMS` manifest, verified identical to the first copy. This is a second copy on the same machine, not an off-machine or encrypted one, so it does not protect against loss of this workstation.
+
+Still open: an off-machine encrypted copy; parsing the GPT entries and checking them against the recorded offsets (offline, no router access); the offline layout rebuild test above.
