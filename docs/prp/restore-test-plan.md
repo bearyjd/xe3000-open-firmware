@@ -61,7 +61,7 @@ Parsed from the local first-4096-sector copy only (no router access; GUIDs not r
 - Seven entries: `log`, `u-boot-env`, `factory`, `fip`, `custom`, `kernel`, `rootfs`. Names, start sectors and sizes equal the sysfs-derived map in the [rollback plan](rollback-plan.md); none overlap in the GPT.
 - `rootfs_data` is not in the GPT, which confirms it is created at runtime from the tail of `rootfs`; a restore must not expect it in the partition table.
 - The last usable sector (15,269,887) is `rootfs`'s final sector and the last sector of the disk, so no backup GPT can sit at the disk end.
-- The header's alternate-header field reads `1`. Not yet checked whether this is a vendor-tool quirk or a parsing error, so do not rely on that field.
+- The header's own-location and alternate-header fields both read LBA 1 (verified by re-reading the raw header: not a parsing error). The vendor partition tool wrote no backup header, consistent with there being no room for one at the disk end.
 - Consequence: rebuild the primary GPT from the saved copy; do not assume a backup table exists to repair from.
 
 Still open: an off-machine encrypted copy; the offline layout rebuild test above.
