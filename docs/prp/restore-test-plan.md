@@ -26,6 +26,13 @@ Consequences: a blank `u-boot-env` means U-Boot runs on built-in defaults, so th
 
 None of these needs the router.
 
+### Vendor 4.8.3 image check (2026-11-07)
+
+- **Source.** The vendor download page is a script-rendered app; the file list comes from the public API `https://firmware-api.gl-inet.com/cloud-api/model/info?model=xe3000`. The stable 4.8.3 entry lists `xe3000-4.8.3_release3-902-1106-1762433511.bin`, 64,915,109 bytes, SHA-256 `ba6f76f32686e86c30eed4dd7458ed92f7545a2079c1ae7365447cc1ff56f876`, compiled 2025-11-06. The downloaded file (kept in the gitignored `build/vendor-fw-4.8.3-20261107/`) matched both size and hash. The same API also lists newer testing releases (4.11.0 and others) and 4.8.4 snapshots; none were fetched.
+- **Contents.** A plain sysupgrade tarball (`CONTROL` = `BOARD=glinet_gl-xe3000`, `kernel`, `root`); it contains **no bootloader**. Headers were read in memory without extraction. `kernel` is a 3,701,711-byte FDT/FIT image (header total size equals the file size) and fits the 32 MiB `kernel` partition. `root` is a 61,205,504-byte squashfs 4.0 (58.37 MiB; used bytes 61,205,062) and fits `rootfs`; the device reports `/rom` as 58.5M.
+- **p8 placement explained.** `rootfs_data` starts 61,210,624 bytes into `rootfs`, which is the squashfs size rounded up to the next 64 KiB boundary (5,120 bytes of padding). This supports the runtime-created overlay seen in the GPT and means its start sector depends on the installed image size: a different `root` size moves p8.
+- **Not demonstrated.** The installed `kernel` and `rootfs` were never read from the unit, so they are not compared byte-for-byte with this image. Because the image holds no bootloader, the saved `fip` cannot be compared with a vendor file; the vendor routes U-Boot through support (`support@gl-inet.com`) and warns that a failed U-Boot upgrade leaves the device unrecoverable. Its debrick page gives a web-recovery route (Reset-on-power-up, host at `192.168.1.2`, page at `http://192.168.1.1`) that wipes settings and plugins; it is untested here and gated.
+
 ## What needs hardware (gated, not planned in detail)
 
 - Restoring `fip`, `mmcblk0boot0` or any partition: boot partitions are normally read-only (`force_ro`) and unlocking them is a device write.
