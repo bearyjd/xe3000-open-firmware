@@ -68,3 +68,7 @@ modem/port-owners*
 */rootfs/etc/config/gl_timer
 */dtb/*.dts
 */dtb/*.dtsi
+
+# S6: text produced by scripts/decompile.sh from a bounded list of vendor binaries (unpacked/decompiled/*.r2.txt).
+# The gitleaks pre-flight and the in-memory redaction apply to it like any other unpacked text.
+decompiled/*.r2.txt

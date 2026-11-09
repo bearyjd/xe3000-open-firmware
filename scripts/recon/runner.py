@@ -62,6 +62,7 @@ class RunConfig:
     no_canary: bool = False  # fixture runs only
     canary_file: Path | None = None
     topic: str | None = None  # Phase 2 topic run: narrows inputs and adds the topic prompt
+    only_from: tuple[str, ...] | None = None  # exact display names (from a triage ranking); only ever narrows
 
 
 @dataclass(frozen=True)
@@ -261,6 +262,7 @@ def _manifest(cfg: RunConfig, status: str, est: cost.Estimate, meta: dict, ledge
         "batch": cfg.batch, "batch_id": meta.get("batch_id"),
         "inputs": {"tree_sha256": meta["digest"], "files": meta["files"]}, "skipped": meta["skipped"],
         "denied": meta["denied"], "allow_extra": list(cfg.allow_extra),
+        "only_from": None if cfg.only_from is None else {"files": len(cfg.only_from)},
         "chunks": counts["chunks"], "chunks_cached": counts["cached"],
         "accepted": counts["accepted"], "rejected": counts["rejected"],
         "estimate": {"input_tokens": est.input_tokens, "max_output_tokens": est.max_output_tokens,
@@ -372,7 +374,8 @@ def _topic_globs(cfg: RunConfig) -> tuple[str, ...] | None:
         raise RunRefused(f"unknown topic {cfg.topic!r}") from None
 
 
-def _classify_inputs(groups, patterns, topic_globs: tuple[str, ...] | None = None):
+def _classify_inputs(groups, patterns, topic_globs: tuple[str, ...] | None = None,
+                     only: frozenset[str] | None = None):
     """Split files into sendable texts (redacted again in memory), skipped (excluded/binary/off-topic) and denied.
     Topic globs only narrow what the allowlist already permits."""
     files, skipped, denied, texts = [], [], [], {}
@@ -387,6 +390,8 @@ def _classify_inputs(groups, patterns, topic_globs: tuple[str, ...] | None = Non
                 denied.append(name)
             elif topic_globs is not None and not allowlist.is_allowed(name, topic_globs):
                 skipped.append({"name": name, "reason": "off-topic"})
+            elif only is not None and name not in only:
+                skipped.append({"name": name, "reason": "not-ranked"})
             else:
                 texts[name] = redact_text(data.decode("utf-8", errors="replace"), salt=ANALYZE_SALT)[0]
     return files, skipped, sorted(denied), texts
@@ -400,7 +405,8 @@ def _load_inputs(cfg: RunConfig, out):
     if not preflight.stamp_valid(cfg.root, digest):
         raise RunRefused("no valid pre-flight stamp for the current input tree and gitleaks setup; "
                          "run `just preflight` first")
-    files, skipped, denied, texts = _classify_inputs(groups, _patterns(cfg, out), _topic_globs(cfg))
+    files, skipped, denied, texts = _classify_inputs(groups, _patterns(cfg, out), _topic_globs(cfg),
+                                                       None if cfg.only_from is None else frozenset(cfg.only_from))
     links = [n for d in cfg.inputs if Path(d).exists() for n in paths.list_symlinks(d, cfg.root)]
     skipped = [*skipped, *({"name": n, "reason": "symlink"} for n in links)]
     if not texts:

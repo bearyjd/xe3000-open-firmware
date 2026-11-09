@@ -6,6 +6,7 @@ PODMAN := env_var_or_default('PODMAN', 'podman')
 ROOT   := justfile_directory()
 IMAGE  := 'localhost/xe3000-open-firmware-recon:0.1'
 UNPACK_IMAGE := 'localhost/xe3000-open-firmware-unpack:0.1'
+DECOMPILE_IMAGE := 'localhost/xe3000-open-firmware-decompile:0.1'
 
 # Applied to every container run: no capabilities, no privilege escalation, bounded pids, read-only rootfs.
 hardening := "--cap-drop=ALL --security-opt no-new-privileges --pids-limit 256 --read-only --tmpfs /tmp"
@@ -85,3 +86,19 @@ test-unpack: build-unpack
     {{PODMAN}} run --rm {{hardening}} --network=none \
       -v "{{ROOT}}/scripts:/work/scripts:ro,z" -v "{{ROOT}}/tests:/work/tests:ro,z" \
       {{UNPACK_IMAGE}} pytest -c tests/pytest.ini -p no:cacheprovider --noconftest tests/test_unpack_e2e.py
+
+# Decompile image (pinned radare2 + gcc for the synthetic-ELF test).
+build-decompile:
+    {{PODMAN}} build -t {{DECOMPILE_IMAGE}} -f "{{ROOT}}/containers/decompile.Containerfile" "{{ROOT}}/containers"
+
+# Bounded disassembly of scripts/decompile-targets.txt (max 25) from an unpacked rootfs under build/unpack into unpacked/decompiled/.
+decompile ROOTFS: build-decompile
+    ROOT={{quote(ROOT)}} PODMAN={{quote(PODMAN)}} DECOMPILE_IMAGE={{quote(DECOMPILE_IMAGE)}} HARDENING={{quote(hardening)}} \
+      bash "{{ROOT}}/scripts/decompile.sh" "$1"
+
+# Real-radare2 test on a synthetic ELF built in the container (the recon image has neither r2 nor gcc, so `test` skips it).
+test-decompile: build-decompile
+    {{PODMAN}} run --rm {{hardening}} --network=none \
+      -v "{{ROOT}}/scripts:/work/scripts:ro,z" -v "{{ROOT}}/tests:/work/tests:ro,z" -v "{{ROOT}}/containers:/work/containers:ro,z" \
+      -v "{{ROOT}}/justfile:/work/justfile:ro,z" \
+      {{DECOMPILE_IMAGE}} pytest -c tests/pytest.ini -p no:cacheprovider --noconftest tests/test_decompile.py

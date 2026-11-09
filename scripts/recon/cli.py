@@ -64,12 +64,28 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--cheap", action="store_true", help="use LLM_MODEL_CHEAP (bulk triage)")
     ap.add_argument("--topic", choices=prompts.topic_names(),
                     help="Phase 2 topic run: use the topic prompt and only the topic's subset of allowlisted files")
+    ap.add_argument("--only-from", metavar="FILE", help="narrow to the files listed (one display name per line) in FILE "
+                    "under findings/raw, e.g. from scripts/rank.py; never widens the allowlist")
     ap.add_argument("--env-file", type=Path, help="dotenv file to load; contents are never printed")
     return ap
 
 
+def read_only_from(root: Path, raw: str) -> tuple[str, ...]:
+    """Names listed in a ranking file; the file must live under <root>/findings/raw."""
+    base = (root / "findings" / "raw").resolve()
+    path = (root / raw).resolve()
+    if not path.is_relative_to(base) or not path.is_file():
+        raise runner.RunRefused(f"--only-from must name an existing file under findings/raw: {raw!r}")
+    names = tuple(dict.fromkeys(ln.strip() for ln in path.read_text().splitlines()
+                                if ln.strip() and not ln.lstrip().startswith("#")))
+    if not names:
+        raise runner.RunRefused(f"--only-from file is empty (no file names): {raw!r}")
+    return names
+
+
 def _config(args: argparse.Namespace) -> runner.RunConfig:
     root = args.root.resolve()
+    only = read_only_from(root, args.only_from) if args.only_from else None
     inputs = args.input or list(allowed_roots(root))
     resolved = tuple(p if p.is_absolute() else root / p for p in inputs)
     standard, cheap, _synth = cost.configured_models(os.environ)
@@ -79,7 +95,7 @@ def _config(args: argparse.Namespace) -> runner.RunConfig:
                             dry_run=args.dry_run, batch=args.batch or bool(args.resume_batch),
                             resume_batch_id=args.resume_batch, allow_extra=tuple(args.allow_extra),
                             no_canary=args.no_canary, canary_file=args.canary_file, batch_timeout_seconds=args.batch_timeout,
-                            batch_poll_seconds=args.batch_poll, synthesize=args.synthesize, topic=args.topic)
+                            batch_poll_seconds=args.batch_poll, synthesize=args.synthesize, topic=args.topic, only_from=only)
 
 
 def _lenient_sanitizer(args: argparse.Namespace) -> canary.Sanitizer:

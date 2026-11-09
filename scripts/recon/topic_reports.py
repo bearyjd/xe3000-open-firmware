@@ -13,8 +13,10 @@ from pathlib import Path
 from recon import canary
 from recon.report import GENERATED_NOTE, UNGROUNDED_LABEL, _evidence_prefix, _row, load_findings
 
-REPORT_FILES = {"at-commands": "at-commands.md", "gl-rpc-map": "gl-rpc-map.md", "modem-boot-flow": "modem-boot-flow.md"}
-TITLES = {"at-commands": "AT commands", "gl-rpc-map": "GL RPC map", "modem-boot-flow": "Modem boot flow"}
+REPORT_FILES = {"at-commands": "at-commands.md", "gl-rpc-map": "gl-rpc-map.md", "modem-boot-flow": "modem-boot-flow.md",
+                "fan-led-mcu-battery": "fan-led-mcu-battery.md", "wifi-driver": "wifi-driver.md"}
+TITLES = {"at-commands": "AT commands", "gl-rpc-map": "GL RPC map", "modem-boot-flow": "Modem boot flow",
+          "fan-led-mcu-battery": "Fan, LED, MCU and battery", "wifi-driver": "Wi-Fi driver"}
 TABLE_HEAD = ("| Claim | Confidence | Status | Evidence |", "|---|---|---|---|")
 NAC_HEADING = "## Network access control"
 OTHER_HEADING = "## Other RPC methods"
