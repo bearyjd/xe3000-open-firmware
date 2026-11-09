@@ -23,7 +23,7 @@ def test_every_run_is_hardened():
     for flag in ("--cap-drop=ALL", "--security-opt no-new-privileges", "--pids-limit", "--read-only"):
         assert flag in line, flag
     runs = [l for l in TEXT.splitlines() if "run --rm" in l]
-    assert len(runs) == 2 and all("{{hardening}}" in l for l in runs)  # the test and test-unpack recipes
+    assert len(runs) == 3 and all("{{hardening}}" in l for l in runs)  # test, test-unpack and test-decompile
     for name, body in SCRIPTS.items():
         run_lines = [l for l in body.splitlines() if "run --rm" in l]
         assert run_lines and all("$HARDENING" in l for l in run_lines), name

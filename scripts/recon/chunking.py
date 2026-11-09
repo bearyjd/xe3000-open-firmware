@@ -12,6 +12,7 @@ NUM_WIDTH = 5
 # Ordered: first match wins (so /etc/config/rpcd is a UCI config, not an RPC handler).
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("har", (".har",)),
+    ("disassembly", ("/decompiled/",)),  # before rpc/rootfs rules: file names embed the binary path
     ("hotplug-script", ("/hotplug.d/",)),
     ("init-script", ("/init.d/", "/rc.d/")),
     ("uci-config", ("/etc/config/",)),
@@ -24,7 +25,7 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 OTHER = "other"
 # Ground truth is built only from these (not HAR captures or unclassified text, which may carry foreign content).
 TRUSTED_TYPES = frozenset({"init-script", "hotplug-script", "uci-config", "dts", "dmesg", "module-info",
-                           "rootfs-script", "rpc-handler"})
+                           "rootfs-script", "rpc-handler", "disassembly"})
 
 
 @dataclass(frozen=True)

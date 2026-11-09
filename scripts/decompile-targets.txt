@@ -1,0 +1,27 @@
+# Vendor binaries to disassemble (max 25), relative to the unpacked stock rootfs. Picked from ground-truth strings:
+# AT command tables (modem), MCU/fan/LED/GPIO helpers, the RPC/ubus front ends and the Wi-Fi/fan/LED kernel modules.
+usr/bin/gl_modem
+usr/bin/modem_AT
+usr/bin/at_cache
+usr/bin/carrier-monitor
+usr/bin/qcm
+usr/bin/quec_upload
+usr/bin/QFirehose
+usr/bin/smsd
+usr/bin/sms_manager
+usr/bin/lpa_arm64_v1.50
+usr/bin/gl_fan
+usr/bin/mcu_update
+usr/bin/regs
+usr/bin/fwdd
+www/cgi-bin/glc
+usr/lib/uhttpd_ubus.so
+usr/lib/libgl-utils.so
+usr/lib/lua/periphery.so
+usr/lib/lua/lfactory.so
+lib/modules/5.4.211/gl_fan_driver.ko
+lib/modules/5.4.211/pwm-fan.ko
+lib/modules/5.4.211/gl-sdk4-hw-info.ko
+lib/modules/5.4.211/leds-gpio.ko
+lib/modules/5.4.211/gpio-button-hotplug.ko
+lib/modules/5.4.211/mt_wifi.ko

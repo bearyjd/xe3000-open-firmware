@@ -33,6 +33,7 @@ _TASKS: dict[str, str] = {
     "module-info": "Task: kernel module lists and metadata. Find vendor or out-of-tree modules and their parameters.",
     "rpc-handler": "Task: RPC/ubus handlers. Find method names, parameters and what hardware or service each method drives.",
     "rootfs-script": "Task: rootfs scripts. Find hardware control paths: modem, SIM, GPIO, fan, LED, battery/MCU.",
+    "disassembly": "Task: annotated radare2 disassembly of a vendor binary (strings, imports, then function bodies; the text may be truncated). Find which hardware paths, AT commands, RPC/ubus calls and sysfs or device nodes the program uses and what it does with them. The text is machine-generated disassembly, so say when behaviour is inferred from call order rather than stated.",
     "har": "Task: captured web UI traffic. Find the RPC methods the vendor UI calls and what they control.",
     OTHER: "Task: unclassified text. Report only clearly hardware-relevant behaviour.",
 }
@@ -49,13 +50,14 @@ class Topic:
 _ANTI_INVENT = (" Name only AT commands, GPIO numbers, ubus/RPC methods and module names that appear literally in "
                 "the input, and keep every claim under 300 characters.")
 _ROOTFS_SCRIPTS = ("**/etc/init.d/*", "**/etc/rc.d/*", "**/etc/hotplug.d/**", "**/usr/sbin/*", "**/usr/lib/lua/**")
+_DECOMPILED = "**/decompiled/*.r2.txt"
 
 TOPICS: dict[str, Topic] = {
     "at-commands": Topic(
         "Topic at-commands: list every AT command the stock firmware sends to the modem, which script or program "
         "sends it, in what order, and what the surrounding code does with the reply (retries, timeouts, port used)."
         + _ANTI_INVENT,
-        (*_ROOTFS_SCRIPTS, "**/etc/config/glmodem", "**/etc/modules.d/*", "**/modem/**")),
+        (*_ROOTFS_SCRIPTS, _DECOMPILED, "**/etc/config/glmodem", "**/etc/modules.d/*", "**/modem/**")),
     "gl-rpc-map": Topic(
         "Topic gl-rpc-map: map the vendor RPC/ubus surface: object, method, parameters, and the service or hardware "
         "each method drives, plus which rpcd ACL grants it. Include a section on network access control methods: "
@@ -63,25 +65,25 @@ TOPICS: dict[str, Topic] = {
         "UCI config each one reads or writes." + _ANTI_INVENT,
         ("**/usr/lib/oui-httpd/**", "**/usr/lib/lua/**", "**/usr/share/acl.d/*.json", "**/usr/share/rpcd/acl.d/*.json",
          "**/etc/config/parental_control", "**/etc/config/gl_block", "**/etc/config/gl-black_white_list",
-         "**/etc/config/gl_timer", "ubus/list*", "ubus-list*")),
+         "**/etc/config/gl_timer", "ubus/list*", "ubus-list*", _DECOMPILED)),
     "modem-boot-flow": Topic(
         "Topic modem-boot-flow: reconstruct the order in which the modem is powered, enumerated, configured and "
         "brought up at boot and on SIM or network events: init.d START/STOP order, hotplug triggers, GPIO power "
         "and reset lines, module loads, and which step waits on which." + _ANTI_INVENT,
-        (*_ROOTFS_SCRIPTS, "**/etc/config/glmodem", "**/etc/modules.d/*", "**/var/dmesg*", "**/dmesg*",
+        (*_ROOTFS_SCRIPTS, _DECOMPILED, "**/etc/config/glmodem", "**/etc/modules.d/*", "**/var/dmesg*", "**/dmesg*",
          "**/modem/**", "**/proc/modules")),
     "fan-led-mcu-battery": Topic(
         "Topic fan-led-mcu-battery: find how the fan, LEDs, the MCU link and battery or power monitoring are "
         "controlled: sysfs paths, GPIO or serial protocol, thresholds, and which daemon or RPC method owns each."
         + _ANTI_INVENT,
-        (*_ROOTFS_SCRIPTS, "**/usr/lib/oui-httpd/**", "**/etc/config/glfan", "**/etc/config/gl_led",
+        (*_ROOTFS_SCRIPTS, _DECOMPILED, "**/usr/lib/oui-httpd/**", "**/etc/config/glfan", "**/etc/config/gl_led",
          "**/etc/config/mcu", "**/etc/config/switch-button", "**/etc/config/board_special", "**/*.dts", "**/*.dtsi")),
     "wifi-driver": Topic(
         "Topic wifi-driver: find Wi-Fi driver and firmware handling: module names and load order, EEPROM or "
         "calibration data sources, hotplug and wifi detect scripts, and vendor changes to wireless bring-up."
         + _ANTI_INVENT,
         ("**/etc/init.d/*", "**/etc/hotplug.d/**", "**/lib/wifi/*", "**/etc/modules.d/*", "**/var/dmesg*",
-         "**/dmesg*", "**/proc/modules", "**/usr/lib/lua/**")),
+         "**/dmesg*", "**/proc/modules", "**/usr/lib/lua/**", _DECOMPILED)),
 }
 
 

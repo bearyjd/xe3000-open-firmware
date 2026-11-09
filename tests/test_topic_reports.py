@@ -23,8 +23,8 @@ def _run(tmp_path, findings, topic="gl-rpc-map"):
     return run_dir
 
 
-def test_report_names_cover_three_documents():
-    assert set(topic_reports.REPORT_FILES) == {"at-commands", "gl-rpc-map", "modem-boot-flow"}
+def test_report_names_cover_all_five_documents():
+    assert set(topic_reports.REPORT_FILES) == {"at-commands", "gl-rpc-map", "modem-boot-flow", "fan-led-mcu-battery", "wifi-driver"}
 
 
 @pytest.mark.parametrize("topic", ["at-commands", "gl-rpc-map", "modem-boot-flow"])
@@ -74,7 +74,7 @@ def test_rpc_map_section_is_present_even_when_empty(tmp_path):
 
 
 def test_unknown_or_missing_topic_is_refused(tmp_path):
-    run_dir = _run(tmp_path, [_finding("x")], "fan-led-mcu-battery")
+    run_dir = _run(tmp_path, [_finding("x")], "no-such-topic")
     with pytest.raises(ValueError, match="no report"):
         topic_reports.generate(run_dir, tmp_path / "o")
     (run_dir / "manifest.json").write_text("{}")
