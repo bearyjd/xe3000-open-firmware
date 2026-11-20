@@ -11,6 +11,7 @@ import re
 import stat
 import subprocess
 import sys
+from typing import NamedTuple
 
 UPSTREAM = 'https://git.openwrt.org/openwrt/openwrt.git'
 FEED_NAMES = ('packages', 'luci', 'routing', 'telephony', 'video')
@@ -28,7 +29,7 @@ class FirmwareError(RuntimeError):
     """Content-free refusal."""
 
 
-def _path(path: Path) -> Path:
+def path_in_repo(path: Path) -> Path:
     if '..' in Path(path).parts:
         raise FirmwareError('parent traversal refused')
     path = Path(os.path.abspath(path))
@@ -44,19 +45,19 @@ def _path(path: Path) -> Path:
     return path
 
 
-def _file(path: Path) -> bytes:
-    path = _path(path)
+def read_file(path: Path) -> bytes:
+    path = path_in_repo(path)
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         raise FirmwareError('non-regular or linked file refused')
     return path.read_bytes()
 
 
-def _sha(data: bytes) -> str:
+def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _git(directory: Path, *args: str, allowed=(0,)) -> subprocess.CompletedProcess:
+def run_git(directory: Path, *args: str, allowed=(0,)) -> subprocess.CompletedProcess:
     env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0',
                GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE='/dev/null', GIT_NO_LAZY_FETCH='1')
@@ -69,8 +70,8 @@ def _git(directory: Path, *args: str, allowed=(0,)) -> subprocess.CompletedProce
     return result
 
 
-def _metadata_safe(directory: Path) -> None:
-    gitdir = _path(directory / '.git')
+def check_metadata_safe(directory: Path) -> None:
+    gitdir = path_in_repo(directory / '.git')
     if not gitdir.is_dir():
         raise FirmwareError('Git metadata directory refused')
     indirect = ('commondir', 'gitdir', 'config.worktree',
@@ -84,12 +85,12 @@ def _metadata_safe(directory: Path) -> None:
                 raise FirmwareError('Git metadata alias or special file refused')
 
 
-def _source_settings(source: Path) -> None:
+def check_source_settings(source: Path) -> None:
     # Parse only this physical file with stdlib. No Git setup, includes, helpers,
     # object lookup, or lazy fetch may occur before this allowlist passes.
     parser = configparser.RawConfigParser(strict=True, allow_no_value=True, delimiters=('=',))
     try:
-        text = _file(source / '.git/config').decode()
+        text = read_file(source / '.git/config').decode()
         if any(line[:1].isspace() and line.lstrip().startswith('[') for line in text.splitlines()):
             raise FirmwareError('ambiguous Git configuration refused')
         parser.read_string(text)
@@ -121,14 +122,14 @@ def _source_settings(source: Path) -> None:
         raise FirmwareError('source object format refused')
 
 
-def _integrity(directory: Path, pin: str) -> None:
-    _git(directory, 'fsck', '--strict', '--no-reflogs', '--no-dangling', pin)
+def check_integrity(directory: Path, pin: str) -> None:
+    run_git(directory, 'fsck', '--strict', '--no-reflogs', '--no-dangling', pin)
 
 
 def _tracked_bytes(checkout: Path, pin: str) -> None:
     # Compare worktree bytes directly with commit blob IDs. The mutable index,
     # stat cache, assume-unchanged/skip-worktree flags and filters are irrelevant.
-    rows = list(filter(None, _git(checkout, 'ls-tree', '-rz', pin).stdout.split(b'\0')))
+    rows = list(filter(None, run_git(checkout, 'ls-tree', '-rz', pin).stdout.split(b'\0')))
     expected_names = {os.fsdecode(row.split(b'\t', 1)[1]) for row in rows}
     expected_dirs = {parent.as_posix() for name in expected_names for parent in Path(name).parents
                      if parent != Path('.')}
@@ -151,7 +152,7 @@ def _tracked_bytes(checkout: Path, pin: str) -> None:
         rel = Path(os.fsdecode(name))
         if rel.is_absolute() or any(part in (b'', b'.', b'..') for part in name.split(b'/')):
             raise FirmwareError('tracked source path refused')
-        path = _path(checkout / rel.parent) / rel.name
+        path = path_in_repo(checkout / rel.parent) / rel.name
         info = path.lstat()
         if mode == b'120000' and kind == b'blob':
             if not stat.S_ISLNK(info.st_mode):
@@ -161,7 +162,7 @@ def _tracked_bytes(checkout: Path, pin: str) -> None:
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                     or info.st_mode & 0o111 != (0o111 if mode == b'100755' else 0)):
                 raise FirmwareError('tracked source mode changed')
-            content = _file(path)
+            content = read_file(path)
         else:
             raise FirmwareError('unsupported tracked source mode')
         digest = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest().encode()
@@ -169,8 +170,15 @@ def _tracked_bytes(checkout: Path, pin: str) -> None:
             raise FirmwareError('tracked source content changed')
 
 
-def _recipe(path: Path) -> tuple[dict, bytes, bytes, bytes]:
-    raw = _file(path)
+class Recipe(NamedTuple):
+    data: dict
+    raw: bytes
+    seed: bytes
+    expected_feeds: bytes
+
+
+def load_recipe(path: Path) -> Recipe:
+    raw = read_file(path)
     data = json.loads(raw)
     if not isinstance(data, dict) or set(data) != {'schema_version', 'upstream', 'feeds'} or data['schema_version'] != 1:
         raise FirmwareError('recipe schema refused')
@@ -188,39 +196,39 @@ def _recipe(path: Path) -> tuple[dict, bytes, bytes, bytes]:
                 or not isinstance(row['url'], str) or not re.fullmatch(r'https://[A-Za-z0-9./_-]+\.git', row['url'])):
             raise FirmwareError('feed pins refused')
     expected = ''.join(f"src-git {row['name']} {row['url']}^{row['commit']}\n" for row in feeds).encode()
-    seed = _file(path.parent / 'xe3000.config')
+    seed = read_file(path.parent / 'xe3000.config')
     if seed != SEED:
         raise FirmwareError('target seed refused')
-    return data, raw, seed, expected
+    return Recipe(data, raw, seed, expected)
 
 
 def _objects(directory: Path, data: dict, expected_feeds: bytes) -> int:
     pin = data['upstream']['commit']
-    if _git(directory, 'cat-file', '-t', pin).stdout.strip() != b'commit':
+    if run_git(directory, 'cat-file', '-t', pin).stdout.strip() != b'commit':
         raise FirmwareError('source commit missing')
-    if _git(directory, 'show', f'{pin}:feeds.conf.default').stdout != expected_feeds:
+    if run_git(directory, 'show', f'{pin}:feeds.conf.default').stdout != expected_feeds:
         raise FirmwareError('upstream feed pins differ from recipe')
-    profile = _git(directory, 'show', f'{pin}:{PROFILE}').stdout
+    profile = run_git(directory, 'show', f'{pin}:{PROFILE}').stdout
     if b'define Device/glinet_gl-xe3000\n' not in profile:
         raise FirmwareError('upstream device profile missing')
-    _git(directory, 'cat-file', '-e', f'{pin}:{DTS}')
-    epoch = _git(directory, 'show', '-s', '--format=%ct', pin).stdout.strip()
+    run_git(directory, 'cat-file', '-e', f'{pin}:{DTS}')
+    epoch = run_git(directory, 'show', '-s', '--format=%ct', pin).stdout.strip()
     if not epoch.isdigit():
         raise FirmwareError('source timestamp refused')
     return int(epoch)
 
 
-def _manifest(data: dict, recipe: bytes, seed: bytes, epoch: int) -> dict:
+def build_manifest(data: dict, recipe: bytes, seed: bytes, epoch: int) -> dict:
     return {'schema_version': 1, 'status': 'prepared-unconfigured', 'production_ready': False,
             'firmware_build_complete': False, 'source_url': data['upstream']['url'],
             'source_commit': data['upstream']['commit'], 'tag_label': data['upstream']['tag'],
-            'feeds': data['feeds'], 'source_date_epoch': epoch, 'seed_sha256': _sha(seed),
-            'recipe_sha256': _sha(recipe)}
+            'feeds': data['feeds'], 'source_date_epoch': epoch, 'seed_sha256': sha256_hex(seed),
+            'recipe_sha256': sha256_hex(recipe)}
 
 
-def _locations(root: Path, source: Path, out: Path) -> tuple[Path, Path, Path]:
-    root, source, out = _path(root), _path(source), _path(out)
-    build = _path(root / 'build')
+def resolve_locations(root: Path, source: Path, out: Path) -> tuple[Path, Path, Path]:
+    root, source, out = path_in_repo(root), path_in_repo(source), path_in_repo(out)
+    build = path_in_repo(root / 'build')
     if (not root.is_dir() or out == build or not out.is_relative_to(build)
             or out == source or out.is_relative_to(source) or source.is_relative_to(out)):
         raise FirmwareError('destination must be independent under project build')
@@ -228,30 +236,30 @@ def _locations(root: Path, source: Path, out: Path) -> tuple[Path, Path, Path]:
 
 
 def prepare(root: Path, source: Path, out: Path, recipe: Path) -> Path:
-    root, source, out = _locations(root, source, out)
-    recipe = _path(recipe)
-    if out.exists() or not source.is_dir() or not _path(source / '.git').is_dir():
+    root, source, out = resolve_locations(root, source, out)
+    recipe = path_in_repo(recipe)
+    if out.exists() or not source.is_dir() or not path_in_repo(source / '.git').is_dir():
         raise FirmwareError('source or new destination refused')
-    _metadata_safe(source)
-    _source_settings(source)
-    data, raw, seed, expected = _recipe(recipe)
+    check_metadata_safe(source)
+    check_source_settings(source)
+    data, raw, seed, expected = load_recipe(recipe)
     pin = data['upstream']['commit']
-    _integrity(source, pin)
-    if _git(source, 'ls-tree', '-z', pin, '--', '.config').stdout:
+    check_integrity(source, pin)
+    if run_git(source, 'ls-tree', '-z', pin, '--', '.config').stdout:
         raise FirmwareError('upstream tracks target config')
     epoch = _objects(source, data, expected)
     out.parent.mkdir(parents=True, exist_ok=True)
-    _path(out.parent)
+    path_in_repo(out.parent)
     out.mkdir()
     try:
         checkout = out / 'checkout'
-        _git(root, 'clone', '--local', '--no-hardlinks', '--no-checkout', '--', str(source), str(checkout))
+        run_git(root, 'clone', '--local', '--no-hardlinks', '--no-checkout', '--', str(source), str(checkout))
         (checkout / '.git/config').write_bytes(GIT_CONFIG)
-        _git(checkout, 'checkout', '--detach', data['upstream']['commit'])
+        run_git(checkout, 'checkout', '--detach', data['upstream']['commit'])
         fd = os.open(checkout / '.config', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(fd, 'wb') as handle:
             handle.write(seed)
-        (out / 'manifest.json').write_text(json.dumps(_manifest(data, raw, seed, epoch), indent=2, sort_keys=True) + '\n')
+        (out / 'manifest.json').write_text(json.dumps(build_manifest(data, raw, seed, epoch), indent=2, sort_keys=True) + '\n')
         verify(root, source, out, recipe)
     except Exception:
         # A partial stage is retained for inspection but never claims preparation succeeded.
@@ -262,23 +270,23 @@ def prepare(root: Path, source: Path, out: Path, recipe: Path) -> Path:
 
 
 def verify(root: Path, source: Path, out: Path, recipe: Path) -> Path:
-    root, source, out = _locations(root, source, out)
-    data, raw, seed, expected = _recipe(_path(recipe))
-    checkout = _path(out / 'checkout')
-    _metadata_safe(checkout)
-    if _file(checkout / '.git/config') != GIT_CONFIG or (checkout / '.git/objects/info/alternates').exists():
+    root, source, out = resolve_locations(root, source, out)
+    data, raw, seed, expected = load_recipe(path_in_repo(recipe))
+    checkout = path_in_repo(out / 'checkout')
+    check_metadata_safe(checkout)
+    if read_file(checkout / '.git/config') != GIT_CONFIG or (checkout / '.git/objects/info/alternates').exists():
         raise FirmwareError('checkout Git settings changed')
-    _integrity(checkout, data['upstream']['commit'])
-    if _git(checkout, 'rev-parse', 'HEAD').stdout.strip().decode() != data['upstream']['commit']:
+    check_integrity(checkout, data['upstream']['commit'])
+    if run_git(checkout, 'rev-parse', 'HEAD').stdout.strip().decode() != data['upstream']['commit']:
         raise FirmwareError('checkout commit changed')
-    if _git(checkout, 'symbolic-ref', '-q', 'HEAD', allowed=(0, 1)).returncode != 1:
+    if run_git(checkout, 'symbolic-ref', '-q', 'HEAD', allowed=(0, 1)).returncode != 1:
         raise FirmwareError('checkout must remain detached')
     epoch = _objects(checkout, data, expected)
-    if _file(checkout / 'feeds.conf.default') != expected or _file(checkout / '.config') != seed:
+    if read_file(checkout / 'feeds.conf.default') != expected or read_file(checkout / '.config') != seed:
         raise FirmwareError('checkout feeds or target seed changed')
     _tracked_bytes(checkout, data['upstream']['commit'])
-    manifest = json.loads(_file(out / 'manifest.json'))
-    if manifest != _manifest(data, raw, seed, epoch):
+    manifest = json.loads(read_file(out / 'manifest.json'))
+    if manifest != build_manifest(data, raw, seed, epoch):
         raise FirmwareError('source preparation manifest changed')
     return out
 
@@ -292,7 +300,7 @@ def main(argv=None) -> int:
     parser.add_argument('--verify', action='store_true')
     args = parser.parse_args(argv)
     try:
-        root = _path(args.root)
+        root = path_in_repo(args.root)
         action = verify if args.verify else prepare
         action(root, args.source or root / 'build/openwrt', args.out, args.recipe or root / 'recipe/upstream.json')
     except (FirmwareError, OSError, ValueError, TypeError, KeyError, UnicodeError):
