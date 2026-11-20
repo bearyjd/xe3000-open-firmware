@@ -38,8 +38,8 @@ def _summarize(directory: Path) -> dict:
     bundle_path = directory.joinpath(*BUNDLE_PARTS)
     if not bundle_path.is_file():
         raise fw.FirmwareError('CA bundle missing: ' + directory.name)
-    bundle = _der_digests(fw._file(bundle_path))
-    parsed = [d for crt in crt_files for d in _der_digests(fw._file(crt))]
+    bundle = _der_digests(fw.read_file(bundle_path))
+    parsed = [d for crt in crt_files for d in _der_digests(fw.read_file(crt))]
     return {'directory': directory.name, 'sets_equal': set(bundle) == set(parsed),
             'crt_files': len(crt_files),
             'bundle_blocks': len(bundle), 'bundle_unique': len(set(bundle)),

@@ -288,3 +288,11 @@ def test_git_metadata_indirection_refused_before_external_config_or_git(setup, m
     monkeypatch.setattr(io, 'open', guarded_open)
     monkeypatch.setattr(subprocess, 'run', no_git_before_rejection)
     assert invoke(setup, *(['--verify'] if phase == 'verify' else [])) == 2
+
+
+def test_load_recipe_returns_named_fields():
+    recipe = firmware.load_recipe(REPO / 'recipe/upstream.json')
+    assert recipe.data['schema_version'] == 1
+    assert recipe.raw == (REPO / 'recipe/upstream.json').read_bytes()
+    assert recipe.seed == SEED.encode()
+    assert recipe.expected_feeds.startswith(b'src-git packages ')
