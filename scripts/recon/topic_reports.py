@@ -11,13 +11,12 @@ import sys
 from pathlib import Path
 
 from recon import canary
-from recon.report import GENERATED_NOTE, UNGROUNDED_LABEL, _evidence_prefix, _row, load_findings
+from recon.report import GENERATED_NOTE, TABLE_HEAD, UNGROUNDED_LABEL, evidence_prefix_for, load_findings, table_row
 
 REPORT_FILES = {"at-commands": "at-commands.md", "gl-rpc-map": "gl-rpc-map.md", "modem-boot-flow": "modem-boot-flow.md",
                 "fan-led-mcu-battery": "fan-led-mcu-battery.md", "wifi-driver": "wifi-driver.md"}
 TITLES = {"at-commands": "AT commands", "gl-rpc-map": "GL RPC map", "modem-boot-flow": "Modem boot flow",
           "fan-led-mcu-battery": "Fan, LED, MCU and battery", "wifi-driver": "Wi-Fi driver"}
-TABLE_HEAD = ("| Claim | Confidence | Status | Evidence |", "|---|---|---|---|")
 NAC_HEADING = "## Network access control"
 OTHER_HEADING = "## Other RPC methods"
 NAC_KEYWORDS = ("client", "block", "allow", "deny", "schedule", "parental", "black list", "blacklist", "white list",
@@ -39,7 +38,7 @@ def _topic(run_dir: Path) -> str:
 def _table(findings: list[dict], evidence_prefix: str = "") -> list[str]:
     if not findings:
         return ["No findings."]
-    return [*TABLE_HEAD, *(_row(f, evidence_prefix) for f in findings)]
+    return [*TABLE_HEAD, *(table_row(f, evidence_prefix) for f in findings)]
 
 
 def is_access_control(finding: dict) -> bool:
@@ -68,7 +67,7 @@ def generate(run_dir: Path, out_dir: Path, sanitizer: canary.Sanitizer | None = 
     findings = load_findings(run_dir, sanitizer)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / REPORT_FILES[topic]
-    path.write_text(render(topic, findings, run_dir.name, evidence_prefix=_evidence_prefix(run_dir, out_dir)))
+    path.write_text(render(topic, findings, run_dir.name, evidence_prefix=evidence_prefix_for(run_dir, out_dir)))
     return [path]
 
 
