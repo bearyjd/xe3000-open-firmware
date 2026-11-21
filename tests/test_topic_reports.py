@@ -102,3 +102,10 @@ def test_topic_evidence_links_resolve_to_evidence(tmp_path, output, zone, topic)
     assert not href.scheme and not href.netloc and not href.path.startswith("/")
     assert href.fragment == "L7" and not href.query
     assert (path.parent / unquote(href.path)).resolve() == evidence.resolve()
+
+
+def test_topic_table_header_is_the_category_report_header():
+    from recon import report
+    assert topic_reports.TABLE_HEAD is report.TABLE_HEAD
+    out = report.render_category("rpc-method", [_finding("c")], "run1")
+    assert "\n".join(report.TABLE_HEAD) in out
